@@ -9,6 +9,7 @@ import {
   hasCodexPermission,
   isCodex,
   looksLikeCodexId,
+  looksLikeOpenCodeId,
   providerOf,
   showsProviderTag,
 } from './provider';
@@ -21,6 +22,7 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(isCodex({ provider: 'codex' })).toBe(true);
     expect(isCodex({ provider: 'claude' })).toBe(false);
     expect(isCodex(null)).toBe(false);
+    expect(providerOf({ provider: 'opencode' })).toBe('opencode');
   });
 
   it('id com cara de pasta do Codex (só quando a conta já não está no snapshot)', () => {
@@ -32,6 +34,10 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(accountProvider(undefined, '.claude', 'codex')).toBe('codex');
     expect(accountProvider(undefined, '.codex')).toBe('codex');
     expect(accountProvider(undefined, 'x')).toBe('claude');
+    expect(looksLikeOpenCodeId('.opencode')).toBe(true);
+    expect(looksLikeOpenCodeId('/home/test/.opencode')).toBe(true);
+    expect(looksLikeOpenCodeId('.claude')).toBe(false);
+    expect(accountProvider(undefined, '.opencode')).toBe('opencode');
   });
 
   it('letra do chip sem a conta no snapshot: nunca "." nem vazio', () => {
@@ -44,6 +50,7 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(fallbackShort('minha-conta')).toBe('M');
     expect(fallbackShort('')).toBe('?');
     expect(fallbackShort('...', 'codex')).toBe('X');
+    expect(fallbackShort('.opencode', 'opencode')).toBe('O');
   });
 
   it('selo "Codex": só no Codex, e sem repetir o nome da conta', () => {
@@ -51,6 +58,8 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(showsProviderTag('codex', 'Codex')).toBe(false);
     expect(showsProviderTag('codex', 'Demo Codex')).toBe(false);
     expect(showsProviderTag('claude', 'Conta C')).toBe(false);
+    expect(showsProviderTag('opencode', 'Conta O')).toBe(true);
+    expect(showsProviderTag('opencode', 'OpenCode')).toBe(false);
   });
 
   it('rótulo do chip: e-mail no Claude Code; ferramenta e plano no Codex', () => {
@@ -59,6 +68,7 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(accountChipLabel({ name: 'Codex', plan: 'Team', provider: 'codex' }, '.codex', 'codex')).toBe('Codex · plano Team');
     expect(accountChipLabel(undefined, '.codex', 'codex')).toBe('.codex · Codex');
     expect(accountChipLabel(undefined, '', 'claude')).toBe('Conta desconhecida');
+    expect(accountChipLabel({ name: 'OpenCode' }, '.opencode', 'opencode')).toBe('OpenCode');
   });
 
   it('escritório vazio: atalhos só das contas do Claude Code; o Codex entra quando há conta dele', () => {
@@ -69,6 +79,7 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(emptyOfficeHint([c, d, x])).toBe('Abra o Claude Code (atalhos c ou d) ou o Codex em qualquer projeto e veja seu agente chegar.');
     expect(emptyOfficeHint([x])).toBe('Abra o Claude Code ou o Codex em qualquer projeto e veja seu agente chegar.');
     expect(emptyOfficeHint([])).toBe('Abra o Claude Code em qualquer projeto e veja seu agente chegar.');
+    expect(emptyOfficeHint([{ short: 'O', provider: 'opencode' }])).toBe('Abra OpenCode em qualquer projeto e veja seu agente chegar.');
   });
 
   it('relógio de 1 s enquanto há pedido do Codex esperando', () => {

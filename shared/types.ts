@@ -13,9 +13,10 @@ export type AgentKind = 'main' | 'sub';
  * De qual ferramenta vem o agente (ou a conta, a fonte, a sessão, o pedido). Nos tipos do protocolo o campo
  * `provider` é opcional e AUSENTE quer dizer 'claude' (tudo o que existia antes do Codex continua igual).
  * - claude: Claude Code;
- * - codex: OpenAI Codex (CLI `codex` e o app desktop, que gravam no mesmo CODEX_HOME).
+ * - codex: OpenAI Codex (CLI `codex` e o app desktop, que gravam no mesmo CODEX_HOME);
+ * - opencode: OpenCode, observado pela API HTTP v2 local.
  */
-export type Provider = 'claude' | 'codex';
+export type Provider = 'claude' | 'codex' | 'opencode';
 
 /**
  * Estado de alto nível de um agente — é o que dirige o comportamento do personagem.
@@ -300,7 +301,7 @@ export interface AccountUsage {
   fetchedAt: number;
 }
 
-/** Uma conta do Claude (um config dir: ~/.claude, ~/.claude-conta2, ...) ou do Codex (um CODEX_HOME: ~/.codex). */
+/** Conta de um provedor: Claude Code, Codex ou OpenCode. */
 export interface AccountInfo {
   /** = AgentInfo.account (basename do config dir, ex.: ".claude"); único entre as contas de todas as ferramentas. */
   id: string;

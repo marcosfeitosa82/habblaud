@@ -104,6 +104,8 @@ export interface MainInput {
   sessionId: string;
   cwd: string;
   role: string;
+  title?: string;
+  model?: string;
   startedAt: number;
   status: AgentStatus;
   waitingFor?: string;
@@ -319,7 +321,11 @@ export class Office {
     if (existing) {
       // Sessão que voltou durante o período de graça.
       delete existing.removeAt;
+      let changed = false;
+      if (p.title !== undefined && existing.info.title !== p.title) { existing.info.title = p.title; changed = true; }
+      if (p.model !== undefined && existing.info.model !== p.model) { existing.info.model = p.model; changed = true; }
       this.setStatus(p.id, p.status, p.waitingFor);
+      if (changed) this.markDirty();
       return;
     }
     const roomId = normalizeCwd(p.cwd);
@@ -335,6 +341,8 @@ export class Office {
       name: person.name,
       look: person.look,
       role: p.role,
+      ...(p.title ? { title: p.title } : {}),
+      ...(p.model ? { model: p.model } : {}),
       sessionId: p.sessionId,
       account: p.account,
       status: p.status,

@@ -553,3 +553,16 @@ O repositório é também um marketplace de plugins do Claude Code (`.claude-plu
 Testes: `npx vitest run server shared` (fixtures sintéticas em `server/test/fixtures.ts`; os scripts do host —
 tap de statusline, hook de permissão (rodado como processo contra um servidor de teste), instaladores e
 `docker-up` — são testados em `server/test/` com HOME e config dirs falsos).
+
+
+## Integração local com OpenCode (experimental)
+
+A integração inicial observa execuções pela API HTTP v2 do OpenCode. Ela é somente leitura e não lê o banco SQLite, arquivos de credenciais ou transcripts internos.
+
+- `HABBLAUD_OPENCODE=1`: habilita o conector (desligado por padrão).
+- `HABBLAUD_OPENCODE_URL=http://127.0.0.1:4096`: origem local da API; somente `localhost`, `127.0.0.0/8` ou `::1` são aceitos.
+- `HABBLAUD_OPENCODE_PASSWORD`: senha Basic Auth correspondente a `OPENCODE_SERVER_PASSWORD` no processo `opencode serve`.
+
+Inicie o backend OpenCode com bind local e senha definida no ambiente, por exemplo `OPENCODE_SERVER_PASSWORD=... opencode serve --hostname 127.0.0.1 --port 4096`. Em outro terminal, conecte a CLI a esse backend com `opencode attach http://127.0.0.1:4096`. O endpoint `/api/session/active` mostra execuções pertencentes ao processo servidor; sessões iniciadas por outra instância independente não aparecem como ativas nesse backend. Defina a mesma senha em `HABBLAUD_OPENCODE_PASSWORD` no processo Habblaud. Não coloque a senha na URL, no código, no navegador ou em arquivos versionados.
+
+Nesta fase, apenas sessões em execução aparecem no escritório. Conversas, histórico, subagentes e comandos de controle ainda não estão integrados. O terminal do OpenCode permanece desabilitado na interface até a implementação do transporte de mensagens pela API.

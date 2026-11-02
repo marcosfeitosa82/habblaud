@@ -699,7 +699,8 @@ class AgentView {
     const kind = !this.id ? '' : router?.interactive(this.id) ? 'interativo' : !readOnly && this.pty.enabled && ptyControllable(this.last) ? 'em outro terminal' : 'ao vivo';
     setText(this.termRo, kind === 'interativo' ? tr('interativo') : kind === 'ao vivo' ? tr('ao vivo') : kind ? tr('em outro terminal') : '');
     // aria-disabled (e não disabled): o botão continua focável e a dica do porquê aparece no hover.
-    const enabled = open || (available && live);
+    const supported = provider !== 'opencode';
+    const enabled = open || (available && live && supported);
     if (enabled) setHidden(this.termWhy, true);
     setAttr(this.termBtn, 'aria-disabled', enabled ? null : 'true');
     this.termBtn.classList.toggle('is-disabled', !enabled);
@@ -710,7 +711,9 @@ class AgentView {
       this.termBtn,
       open
         ? tr('Fechar o terminal (T)')
-        : !available
+        : !supported
+          ? tr('A visualização da conversa OpenCode será habilitada na próxima fase da integração.')
+          : !available
           ? this.ctx.store.replaying
             ? tr('Sem terminal no timelapse: a conversa é a de agora, não a do momento reproduzido.')
             : this.ctx.store.snapshot?.meta.terminal && access().remote

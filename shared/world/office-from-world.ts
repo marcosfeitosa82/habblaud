@@ -49,11 +49,12 @@ export function isWorldId(id: string): boolean {
 }
 
 /** Contas fictícias da visita, uma por ferramenta: só o nome da ferramenta, a letra e a cor (sem e-mail nem uso). */
-export const WORLD_TOOL_ACCOUNTS: Readonly<Record<Provider, { short: string; name: string; color: string }>> = {
+type WorldProvider = 'claude' | 'codex';
+export const WORLD_TOOL_ACCOUNTS: Readonly<Record<WorldProvider, { short: string; name: string; color: string }>> = {
   claude: { short: 'C', name: 'Claude Code', color: '#f08a3c' },
   codex: { short: 'X', name: 'Codex', color: '#a77bf3' },
 };
-const PROVIDERS: readonly Provider[] = ['claude', 'codex'];
+const PROVIDERS: readonly WorldProvider[] = ['claude', 'codex'];
 /** Status que existem no mundo; um que esta versão não conhece vira 'idle' (passeia, sem prometer nada). */
 const STATUSES: readonly AgentStatus[] = ['working', 'waiting', 'idle', 'shell'];
 
@@ -175,7 +176,7 @@ function build(floors: WorldBuildingDetail['floors'], hidden: boolean, now: numb
 function agentInfo(a: WorldAgent, roomId: string, now: number, present: ReadonlySet<string>): AgentInfo {
   const id = worldId(a.id);
   const kind = a.kind === 'sub' ? 'sub' : 'main';
-  const provider: Provider = PROVIDERS.includes(a.provider) ? a.provider : 'claude';
+  const provider: Provider = a.provider === 'codex' ? 'codex' : 'claude';
   const status: AgentStatus = STATUSES.includes(a.status) ? a.status : 'idle';
   const info: AgentInfo = {
     id,

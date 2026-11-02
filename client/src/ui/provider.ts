@@ -1,14 +1,11 @@
-// De qual ferramenta é cada coisa (Claude Code ou Codex) e os textos que mudam com ela. Puro (sem DOM): testado em
-// ui/provider.test.ts. No protocolo, `provider` ausente quer dizer Claude Code (shared/types.ts); aqui tudo cai nisso.
-//
-// Identidade visual do Codex (sem logotipo de ninguém): o chip da conta fica "vazado" (fundo escuro, borda e letra na
-// cor da conta, cantos em degrau) e, onde há espaço, um selo de texto "Codex" ao lado do nome.
+// Identidade e rótulos dos provedores no escritório. No protocolo, `provider` ausente quer dizer Claude Code.
+// O estilo vazado do chip permanece exclusivo do Codex; OpenCode recebe apenas identificação textual.
 import type { AccountInfo, OfficeSnapshot, Provider } from '../../../shared/types';
 import { shortcutHint } from './model';
 import { tr } from '../../../shared/i18n';
 
 /** Nome de cada ferramenta como aparece nos textos. */
-export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
+export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
 
 /** Ferramenta de um agente, conta, sessão ou pedido (ausente = Claude Code). */
 export function providerOf(x: { provider?: Provider } | null | undefined): Provider {
@@ -27,10 +24,15 @@ export function looksLikeCodexId(id: string): boolean {
   return /(?:^|[:/\\])\.?codex(?:[-_.~]|$)/i.test(id);
 }
 
+/** Id de conta OpenCode quando o snapshot já não está disponível. */
+export function looksLikeOpenCodeId(id: string): boolean {
+  return /(?:^|[:/\\])\.?opencode(?:[-_.~]|$)/i.test(id);
+}
+
 /** Ferramenta da conta: a do snapshot; sem ela, a dica de quem chamou ou o jeito do id. */
 export function accountProvider(account: Pick<AccountInfo, 'provider'> | undefined, fallbackId = '', hint?: Provider): Provider {
   if (account) return providerOf(account);
-  return hint ?? (looksLikeCodexId(fallbackId) ? 'codex' : 'claude');
+  return hint ?? (looksLikeOpenCodeId(fallbackId) ? 'opencode' : looksLikeCodexId(fallbackId) ? 'codex' : 'claude');
 }
 
 /**
@@ -45,19 +47,20 @@ export function fallbackShort(id: string, provider: Provider = accountProvider(u
     .replace(/^\.?(?:claude|codex)(?=[-_.]|$)[-_.]?/i, '');
   const letter = /[\p{L}\p{N}]/u.exec(rest)?.[0];
   if (letter) return letter.toUpperCase();
-  return provider === 'codex' ? 'X' : '?';
+  return provider === 'codex' ? 'X' : provider === 'opencode' ? 'O' : '?';
 }
 
 /** O selo "Codex" ao lado do nome da conta (não repete quando o nome já diz "Codex"). */
 export function showsProviderTag(provider: Provider, accountName = ''): boolean {
-  return provider === 'codex' && !/codex/i.test(accountName);
+  return provider !== 'claude' && !new RegExp(provider === 'codex' ? 'codex' : 'opencode', 'i').test(accountName);
 }
 
 /** Rótulo do chip da conta (dica e leitores de tela): "Conta C (dev@x.com)", "Codex · plano Team". */
 export function accountChipLabel(account: Pick<AccountInfo, 'name' | 'email' | 'plan' | 'provider'> | undefined, fallbackId: string, provider: Provider): string {
-  if (!account) return fallbackId ? `${fallbackId}${provider === 'codex' ? ' · Codex' : ''}` : tr('Conta desconhecida');
-  if (provider !== 'codex') return `${account.name}${account.email ? ` (${account.email})` : ''}`;
-  const tag = showsProviderTag(provider, account.name) ? ' · Codex' : '';
+  const providerName = PROVIDER_NAME[provider];
+  if (!account) return fallbackId ? `${fallbackId}${provider === 'claude' ? '' : ` · ${providerName}`}` : tr('Conta desconhecida');
+  if (provider === 'claude') return `${account.name}${account.email ? ` (${account.email})` : ''}`;
+  const tag = showsProviderTag(provider, account.name) ? ` · ${providerName}` : '';
   return `${account.name}${tag}${account.plan ? tr(' · plano {0}', [account.plan]) : ''}`;
 }
 
@@ -66,9 +69,15 @@ export function accountChipLabel(account: Pick<AccountInfo, 'name' | 'email' | '
  * shell (a letra de uma conta do Codex não é um atalho); o Codex só entra quando há uma conta dele.
  */
 export function emptyOfficeHint(accounts: readonly Pick<AccountInfo, 'short' | 'provider'>[]): string {
-  const keys = shortcutHint(accounts.filter((a) => !isCodex(a)));
-  if (!accounts.some(isCodex)) return tr('Abra o Claude Code em qualquer projeto{0} e veja seu agente chegar.', [keys ? ` (${keys})` : '']);
-  return tr('Abra o Claude Code{0} ou o Codex em qualquer projeto e veja seu agente chegar.', [keys ? ` (${keys})` : '']);
+  const codex = accounts.some((a) => providerOf(a) === 'codex');
+  const opencode = accounts.some((a) => providerOf(a) === 'opencode');
+  const keys = shortcutHint(accounts.filter((a) => providerOf(a) === 'claude'));
+  if (!opencode) {
+    if (!codex) return tr('Abra o Claude Code em qualquer projeto{0} e veja seu agente chegar.', [keys ? ` (${keys})` : '']);
+    return tr('Abra o Claude Code{0} ou o Codex em qualquer projeto e veja seu agente chegar.', [keys ? ` (${keys})` : '']);
+  }
+  const tools = [accounts.some((a) => providerOf(a) === 'claude') ? 'Claude Code' : '', codex ? 'Codex' : '', 'OpenCode'].filter(Boolean);
+  return `Abra ${tools.join(' ou ')} em qualquer projeto${keys ? ` (${keys})` : ''} e veja seu agente chegar.`;
 }
 
 /** Algum pedido de permissão do Codex esperando: o prazo é curto e o cartão conta os segundos (relógio de 1 s). */

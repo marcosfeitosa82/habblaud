@@ -37,6 +37,7 @@ import { ClaudeWatcher } from './sources/watcher';
 import { discoverCodexDirs } from './sources/codex/accounts';
 import { CodexHistory } from './sources/codex/history';
 import { CodexSource } from './sources/codex/source';
+import { OpenCodeSource } from './sources/opencode/source';
 import { createBuildReader, readBuildInfo } from './build';
 import { UpdateChecker } from './updates/checker';
 import { getLocale, tr } from '../shared/i18n';
@@ -138,6 +139,17 @@ const agents = new SourceSet([claude]);
 const codexDirs = config.codex ? discoverCodexDirs(process.env, config.home) : [];
 const codex = codexDirs.length ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home }) : undefined;
 if (codex) agents.add(codex);
+const opencode = config.opencode
+  ? new OpenCodeSource({
+      accounts,
+      office,
+      home: config.home,
+      baseUrl: config.opencodeUrl,
+      password: config.opencodePassword,
+      env: process.env,
+    })
+  : undefined;
+if (opencode) agents.add(opencode);
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
 const codexLive: CodexLive | undefined = codex;
@@ -481,6 +493,10 @@ server.listen(config.port, config.host, () => {
     const usage = accounts.usageView(a.id).status;
     log.info(tr('   Conta {0} ({1}): {2} sessão(ões) aberta(s) · uso: {3} · {4}', [a.detected.short, a.id, src?.sessions ?? 0, usage, a.dir]));
   }
+  if (opencode) {
+    const state = opencode.sources()[0];
+    log.info(tr('   OpenCode: {0} ({1} sessão(ões)).', [state?.ok ? tr('conectado') : state?.error ?? tr('aguardando conexão'), state?.sessions ?? 0]));
+  } else log.info(tr('   OpenCode: desligado (HABBLAUD_OPENCODE=1 para ligar).'));
   if (codex) {
     const codexAccounts = codex.accountEntries();
     const open = codex.sources().reduce((n, s) => n + s.sessions, 0);
