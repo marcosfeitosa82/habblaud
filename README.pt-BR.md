@@ -227,31 +227,26 @@ aprova (o Habblaud nunca grava essa aprovação). Com o Habblaud no Docker, para
 deixe também `npm run codex:bridge` rodando no Mac (veja [Codex](#codex)).
 
 
-### 5. OpenCode no escritório (experimental, somente leitura)
+### 5. OpenCode no escritório (experimental)
 
-O Habblaud pode observar sessões em execução do **OpenCode** pela API HTTP v2 local. Não lê o SQLite nem os arquivos de credenciais do OpenCode. Nesta primeira etapa, mostra sessões ativas, projeto, título e modelo; histórico, terminal, subagentes e envio de prompts ainda não estão integrados.
+O Habblaud mostra as sessões do **OpenCode** como um provedor próprio (`opencode`), pela API HTTP v2 do serviço local. Com o OpenCode aberto normalmente, ele descobre o serviço sozinho pelo registro padrão (`~/.local/state/opencode/service.json`, ou `$XDG_STATE_HOME/opencode/service.json`) — não é preciso rodar `opencode serve` nem `opencode attach` à mão.
 
-No primeiro terminal, inicie um backend local com autenticação:
-
-```bash
-export OPENCODE_SERVER_PASSWORD='defina-uma-senha-forte'
-opencode serve --hostname 127.0.0.1 --port 4096
-```
-
-Em outro terminal, conecte a CLI a esse backend — isso é necessário porque a API de sessões ativas mostra execuções pertencentes ao processo servidor:
+Ligue o observador (desligado por padrão):
 
 ```bash
-OPENCODE_SERVER_PASSWORD='a-mesma-senha' opencode attach http://127.0.0.1:4096
+HABBLAUD_OPENCODE=1 npm start
 ```
 
-Inicie o Habblaud com a mesma senha e o conector habilitado:
+Sessões **ativas** aparecem como trabalhando; as encerradas há menos de **30 minutos** continuam como ociosas. Você vê status, atividades, shells, subagentes, a conversa no terminal, o histórico (abertas e encerradas) e pode **mandar mensagens**, **aprovar ou recusar permissões** e **interromper** — tudo pela API oficial, como no Claude Code e no Codex.
+
+Se o registro automático não existir (OpenCode antigo ou outra porta), use o endereço explícito e, se o serviço pedir senha, a mesma `OPENCODE_SERVER_PASSWORD`:
 
 ```bash
 HABBLAUD_OPENCODE=1 HABBLAUD_OPENCODE_URL=http://127.0.0.1:4096 \
 HABBLAUD_OPENCODE_PASSWORD='a-mesma-senha' npm start
 ```
 
-O conector aceita somente `localhost`, `127.0.0.0/8` ou `::1`; não configure um endereço público. O recurso fica desligado por padrão. Esta primeira versão foi desenhada para execução local com Node, não para o Habblaud em Docker.
+Só `localhost`, `127.0.0.0/8` e `::1` são aceitos; a senha nunca vai para a URL, a interface ou os logs. O Habblaud não lê o SQLite, o `auth.json` nem os transcripts internos do OpenCode. Limites: sem replay de eventos (a reconciliação é por polling a cada 15 s), janela de 30 min para sessões recentes e **Habblaud World fora do escopo** por enquanto (as sessões OpenCode não vão para o mundo). Desenhado para o Habblaud local com Node; no Docker, o loopback do container não alcança o serviço do host.
 
 ### Abrir no celular (opcional)
 
@@ -752,9 +747,9 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_REMOTE_ALLOW` | `permissions` | O que o [celular com login](#celular-com-login-e-https-aprovando-pedidos) pode fazer: `permissions`, `messages`, `terminal`, `spawn` (separados por vírgula) ou `none`. Os outros `HABBLAUD_REMOTE_*` são escritos pelo `npm run remote:setup`. |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0` desliga só as mensagens pelo escritório (a caixa no terminal e nos detalhes do agente). |
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
-| `HABBLAUD_OPENCODE` | desligado | `1` liga o observador local do OpenCode (somente leitura). |
-| `HABBLAUD_OPENCODE_URL` | `http://127.0.0.1:4096` | Origem local da API HTTP v2 do OpenCode; somente loopback. |
-| `HABBLAUD_OPENCODE_PASSWORD` | — | Senha Basic Auth correspondente a `OPENCODE_SERVER_PASSWORD`. Não grave em arquivos versionados. |
+| `HABBLAUD_OPENCODE` | desligado | `1` liga o observador local do OpenCode (sessões, terminal, histórico, mensagens e permissões). |
+| `HABBLAUD_OPENCODE_URL` | descoberta automática; senão `http://127.0.0.1:4096` | Origem local da API HTTP v2 do OpenCode, usada quando o registro do serviço não vale; somente loopback. |
+| `HABBLAUD_OPENCODE_PASSWORD` | — | Senha Basic Auth da URL explícita, correspondente a `OPENCODE_SERVER_PASSWORD`. Não grave em arquivos versionados. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |

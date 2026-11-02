@@ -557,12 +557,23 @@ tap de statusline, hook de permissão (rodado como processo contra um servidor d
 
 ## Integração local com OpenCode (experimental)
 
-A integração inicial observa execuções pela API HTTP v2 do OpenCode. Ela é somente leitura e não lê o banco SQLite, arquivos de credenciais ou transcripts internos.
+O OpenCode entra como fonte própria (`server/sources/opencode/`) pela API HTTP v2 do serviço local. O Habblaud não lê
+`opencode.db`, `auth.json`, tokens nem transcripts internos, e não ganhou dependências de runtime.
 
-- `HABBLAUD_OPENCODE=1`: habilita o conector (desligado por padrão).
-- `HABBLAUD_OPENCODE_URL=http://127.0.0.1:4096`: origem local da API; somente `localhost`, `127.0.0.0/8` ou `::1` são aceitos.
-- `HABBLAUD_OPENCODE_PASSWORD`: senha Basic Auth correspondente a `OPENCODE_SERVER_PASSWORD` no processo `opencode serve`.
+- `HABBLAUD_OPENCODE=1`: liga o observador (desligado por padrão).
+- Descoberta automática: `$XDG_STATE_HOME/opencode/service.json` ou `~/.local/state/opencode/service.json` (o registro
+  que a TUI grava), validado pelo PID vivo e por `/api/info` com versão 2.x e o mesmo PID.
+- `HABBLAUD_OPENCODE_URL`: endereço explícito, usado quando o registro não existe ou não vale; sem ele, o padrão é
+  `http://127.0.0.1:4096`. Só `localhost`, `127.0.0.0/8` e `::1` são aceitos.
+- `HABBLAUD_OPENCODE_PASSWORD`: senha Basic Auth da URL explícita; o registro já traz a sua. A senha fica em memória
+  e no cabeçalho, nunca na URL, no snapshot ou nos logs.
 
-Inicie o backend OpenCode com bind local e senha definida no ambiente, por exemplo `OPENCODE_SERVER_PASSWORD=... opencode serve --hostname 127.0.0.1 --port 4096`. Em outro terminal, conecte a CLI a esse backend com `opencode attach http://127.0.0.1:4096`. O endpoint `/api/session/active` mostra execuções pertencentes ao processo servidor; sessões iniciadas por outra instância independente não aparecem como ativas nesse backend. Defina a mesma senha em `HABBLAUD_OPENCODE_PASSWORD` no processo Habblaud. Não coloque a senha na URL, no código, no navegador ou em arquivos versionados.
+O SSE `/api/event` alimenta o ao vivo; como não há replay, `/api/session` e `/api/session/active` reconciliam no boot,
+a cada reconexão e a cada 15 s. Sessões ativas ficam `working`; atualizadas há menos de 30 min, `idle`; sessões filhas
+(`parentID`) viram subagentes. O terminal e o histórico usam `/api/session/:id/message`. Mensagens entram na sessão por
+`prompt`; permissões viram cartões respondidos por `reply` (`once`/`reject`) e “interromper” chama `/interrupt`. Tudo
+isso só vale com acesso local, como o resto das ações sobre sessões.
 
-Nesta fase, apenas sessões em execução aparecem no escritório. Conversas, histórico, subagentes e comandos de controle ainda não estão integrados. O terminal do OpenCode permanece desabilitado na interface até a implementação do transporte de mensagens pela API.
+Limites: janela de 30 min para sessões recentes; eventos perdidos dependem da reconciliação; o Habblaud World segue
+**fora do escopo** e continua excluindo `provider: 'opencode'` da projeção; o caso Docker não é suportado (o loopback
+do container não aponta para o serviço do host). Detalhes em [`docs/OPENCODE-INTEGRATION.md`](../docs/OPENCODE-INTEGRATION.md).

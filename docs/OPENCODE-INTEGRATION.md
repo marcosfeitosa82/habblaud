@@ -1,51 +1,64 @@
 # Integração OpenCode
 
-## Escopo desta entrega
+O Habblaud mostra as sessões do **OpenCode** como um provedor independente (`opencode`). A integração fala a API
+HTTP v2 do serviço local do OpenCode: não lê `opencode.db`, `auth.json`, tokens nem transcripts internos, e não
+acrescenta dependências de runtime.
 
-A integração inicial adiciona o OpenCode como provedor independente (`opencode`) e consulta a API HTTP v2 do backend local. O conector é somente leitura: descobre execuções ativas, diretório do projeto, título e modelo. Não lê `opencode.db`, `auth.json`, tokens ou arquivos internos de sessão.
+## Como ligar
 
-O recurso é opt-in (`HABBLAUD_OPENCODE=1`) e aceita somente endpoints loopback. A autenticação Basic é montada no servidor usando `HABBLAUD_OPENCODE_PASSWORD`; a senha nunca vai para a interface, URL ou logs.
+O observador fica **desligado por padrão**:
 
-## Contrato implementado
+```bash
+HABBLAUD_OPENCODE=1 npm start
+```
 
-- `OpenCodeApiClient`: valida origem local, aplica Basic Auth, timeout e valida envelopes das respostas.
-- `OpenCodeSource`: implementa `AgentSource`, consulta `/api/info`, `/api/session/active` e `/api/session/:id` a cada 1,5 s.
-- `AccountsService`: registra uma conta OpenCode sem interferir nas contas Claude Code ou Codex.
-- `Office.addMain`: recebe título e modelo para a sessão OpenCode.
-- UI: identifica OpenCode, não oferece envio de mensagens e mantém o botão de terminal desabilitado até existir um transporte de conversa.
-- Habblaud World: sessões OpenCode são explicitamente excluídas da projeção atual, em vez de serem convertidas incorretamente para Claude.
+Com o OpenCode aberto normalmente, o Habblaud encontra o serviço sozinho. Duas descobertas são tentadas, nesta ordem:
 
-O backend precisa ser o dono das sessões observadas. Inicie `opencode serve` em loopback e conecte a CLI com `opencode attach http://127.0.0.1:4096`. Sessões executadas por outro processo OpenCode independente não são garantidas no endpoint de sessões ativas desse backend.
+1. **Registro do serviço:** `$XDG_STATE_HOME/opencode/service.json` ou, sem `XDG_STATE_HOME`,
+   `~/.local/state/opencode/service.json` (o arquivo que a TUI grava com `{ id, version, url, pid, password }`). O
+   Habblaud confere que o PID ainda existe e pergunta a `/api/info` qual versão/PID o serviço informa; só aceita
+   quando os dois batem e a versão é da série **2.x**.
+2. **Endereço explícito:** `HABBLAUD_OPENCODE_URL` (e `HABBLAUD_OPENCODE_PASSWORD` para Basic Auth). Sem registro
+   válido nem URL explícita, ele tenta o endereço histórico `http://127.0.0.1:4096`.
 
-## Próximas fases
+Só são aceitos endereços de loopback (`localhost`, `127.0.0.0/8` ou `::1`). A senha lida do registro, ou vinda de
+`HABBLAUD_OPENCODE_PASSWORD`, fica só em memória e no cabeçalho Basic Auth; nunca entra na URL, no snapshot, nos logs
+ou nas mensagens de erro.
 
-1. **Eventos e reconciliação:** consumir `/api/event` (SSE) e manter polling de reconciliação para recuperar eventos perdidos.
-2. **Conversas:** normalizar mensagens, blocos de texto, chamadas de ferramentas e resultados para o modelo de terminal do Habblaud.
-3. **Histórico:** implementar `HistoryProvider` com paginação e resolução de sessão pela API, sem depender do SQLite.
-4. **Subagentes:** mapear `parentID` em `AgentInfo.parentId` e validar a semântica dos eventos de sessão filha.
-5. **Controle:** somente depois, implementar envio de prompts, interrupção e respostas a permissões, usando endpoints oficiais e autorização explícita.
+```bash
+# Só é preciso quando o registro automático não existe (OpenCode antigo, outra porta ou outro processo).
+HABBLAUD_OPENCODE=1 \
+HABBLAUD_OPENCODE_URL=http://127.0.0.1:4096 \
+HABBLAUD_OPENCODE_PASSWORD='a-mesma-senha-do-serviço' npm start
+```
 
-## Arquitetura reutilizável para a plataforma própria
+## O que aparece no escritório
 
-A integração não deve se tornar o núcleo da plataforma futura. Extraia os conceitos para contratos neutros de provedor:
+- **Sessões ativas** (as que o serviço informa como em execução) aparecem como `working`.
+- **Sessões recentes** encerradas há menos de **30 minutos** continuam no escritório como `idle`; passado esse tempo,
+  elas saem. A lista é reconciliada com `/api/session` e `/api/session/active` no boot, a cada reconexão e a cada
+  15 segundos, porque o stream de eventos não tem replay.
+- **Status e atividades:** `session.status` (busy/idle), execução, shells em segundo plano, permissões pendentes
+  (`waiting`), chamadas de ferramenta, passos, raciocínio e texto.
+- **Subagentes:** sessões filhas (`parentID`) viram subagentes do principal (`Office.addSub`).
+- **Terminal e histórico:** o terminal mostra a conversa real (prompts, respostas, ferramentas e resultados) pela
+  API; o histórico lista as sessões recentes não arquivadas, abertas ou encerradas, e abre a mesma conversa.
+- **Mensagens:** a caixa de mensagem envia um `prompt` à sessão, como se o usuário tivesse digitado. Uma mensagem por
+  agente de cada vez, na ordem; `delivered` = a API aceitou o prompt, e o texto nunca vai para o log. Sem o serviço
+  local, o agente não aparece como `canMessage` e a caixa explica o motivo.
+- **Permissões:** um pedido aberto na API vira o cartão “Pede permissão” da gaveta (só com página local aberta e
+  sessão conhecida). Aprovar responde `once`; recusar responde `reject` com o motivo; **interromper** também chama
+  `POST /api/session/:id/interrupt`. O pedido que a ferramenta responder por fora (ou que a sessão deixar) sai do
+  escritório sem decisão.
 
-- `ProviderAdapter`: conexão, autenticação, descoberta e ciclo de vida.
-- `Session`: identidade, workspace, pai, estado e timestamps.
-- `Agent`: papel, modelo, capacidades e vínculo com sessão.
-- `Event`: execução iniciada/concluída, mensagem, ferramenta, permissão e erro.
-- `Message`: conteúdo estruturado, partes, anexos e metadados.
-- `ToolCall`: nome, argumentos, resultado, duração e estado.
-- `PermissionRequest`: ação solicitada, escopo, política e decisão.
-- `Workspace`: diretório, repositório, branch e contexto do projeto.
-- `EventBus`: distribuição ordenada, deduplicação, replay e reconciliação.
-- `PermissionEngine`: política central independente do provedor.
+## Segurança e limites
 
-O núcleo deve consumir eventos normalizados e não conhecer os formatos privados de cada CLI. Adaptadores devem permanecer responsáveis por traduzir APIs e protocolos oficiais. Credenciais ficam em um cofre/ambiente do lado servidor; nunca em snapshots ou no navegador.
-
-## Limites conhecidos
-
-- A API HTTP v2 é a interface suportada por esta integração; o conector não depende do schema SQLite interno.
-- Esta versão mostra apenas sessões ativas do backend conectado; não importa histórico antigo.
-- Sessões filhas são ignoradas temporariamente.
-- O terminal de conversa e ações de controle permanecem desabilitados para OpenCode.
-- A integração foi desenhada para Habblaud executado localmente com Node. O endereço loopback dentro de um container Docker não aponta automaticamente para o host.
+- A API é consultada só em loopback, com timeout e validação dos envelopes das respostas.
+- Nada de banco SQLite, credenciais da TUI ou arquivos internos do OpenCode; nenhum segredo em log, UI ou URL.
+- O SSE (`/api/event`) alimenta o ao vivo, mas **não tem replay**: eventos perdidos são recuperados pela
+  reconciliação por polling.
+- A janela de sessões recentes é de 30 minutos; sessões mais antigas ficam só no histórico da API.
+- O **Habblaud World** fica **fora do escopo** desta entrega: as sessões `opencode` continuam explicitamente
+  excluídas da projeção (o World ainda não negocia `provider: 'opencode'`), em vez de serem convertidas para Claude.
+- Projetado para o Habblaud rodando localmente com Node. Dentro de um container Docker, o loopback não aponta para o
+  serviço do OpenCode no host; esse caso não é suportado nesta versão.

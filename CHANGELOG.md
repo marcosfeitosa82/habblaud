@@ -10,6 +10,21 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **OpenCode no escritório, integrado de verdade.** Com `HABBLAUD_OPENCODE=1`, o Habblaud encontra o serviço local do
+  OpenCode sozinho pelo registro padrão (`~/.local/state/opencode/service.json`), sem `opencode serve` nem
+  `opencode attach` à mão; `HABBLAUD_OPENCODE_URL` e `HABBLAUD_OPENCODE_PASSWORD` continuam como alternativa explícita
+  (só loopback). As sessões aparecem ao vivo pelo stream de eventos, com reconciliação por polling (o stream não tem
+  replay): ativas como trabalhando e as encerradas há menos de 30 minutos como ociosas. Subagentes, shells,
+  atividades, a conversa real no terminal e o histórico (abertas e encerradas) vêm da API v2.
+- **Mensagens, permissões e interrupção pelo OpenCode.** A caixa de mensagem entrega um `prompt` à sessão, como se
+  você tivesse digitado; o cartão “Pede permissão” responde `once` ao aprovar e `reject` (com o motivo) ao recusar, e
+  “interromper” chama `/interrupt`. Tudo só com acesso local, sem ler o SQLite, o `auth.json` ou transcripts internos
+  do OpenCode — e sem dependências novas.
+- **World continua fora do escopo:** as sessões OpenCode seguem excluídas da projeção do Habblaud World, que ainda
+  não fala `provider: 'opencode'`.
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido

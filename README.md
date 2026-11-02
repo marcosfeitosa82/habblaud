@@ -228,6 +228,27 @@ Then **open Codex and approve the Habblaud hooks in `/hooks`**: Codex only runs 
 approve it (Habblaud never writes that approval). With Habblaud in Docker, to send messages to Codex sessions,
 also keep `npm run codex:bridge` running on the Mac (see [Codex](#codex)).
 
+### 5. OpenCode in the office (optional, experimental)
+
+Habblaud shows **OpenCode** sessions as their own provider (`opencode`), through the local service's HTTP v2 API. With OpenCode open normally, it finds the service on its own through the standard registration (`~/.local/state/opencode/service.json`, or `$XDG_STATE_HOME/opencode/service.json`) — no need to run `opencode serve` or `opencode attach` by hand.
+
+Turn the observer on (it's off by default):
+
+```bash
+HABBLAUD_OPENCODE=1 npm start
+```
+
+**Active** sessions show as working; sessions ended less than **30 minutes** ago stay as idle. You see status, activities, shells, subagents, the real conversation in the terminal, the history (open and ended) and can **send messages**, **approve or deny permissions** and **interrupt** — all through the official API, like Claude Code and Codex.
+
+If the automatic registration doesn't exist (older OpenCode or another port), use the explicit address and, if the service requires a password, the same `OPENCODE_SERVER_PASSWORD`:
+
+```bash
+HABBLAUD_OPENCODE=1 HABBLAUD_OPENCODE_URL=http://127.0.0.1:4096 \
+HABBLAUD_OPENCODE_PASSWORD='the-same-password' npm start
+```
+
+Only `localhost`, `127.0.0.0/8` and `::1` are accepted; the password never goes into the URL, the interface or the logs. Habblaud doesn't read OpenCode's SQLite, `auth.json` or internal transcripts. Limits: no event replay (reconciliation polls every 15 s), a 30 min window for recent sessions, and **Habblaud World is out of scope** for now (OpenCode sessions don't go to the world). Designed for local Habblaud with Node; in Docker, the container's loopback doesn't reach the host service.
+
 ### Open on your phone (optional)
 
 By default Habblaud only accepts connections from the computer it runs on. To open it on your phone (on the same Wi-Fi), with Docker:
@@ -729,6 +750,9 @@ Everything works without configuring anything. If you need to adjust something, 
 | `HABBLAUD_CODEX` | on | `0` turns off Codex in the office. |
 | `HABBLAUD_CODEX_DIRS` | automatic detection | Codex folders, comma-separated (instead of `~/.codex*` and `CODEX_HOME`). |
 | `HABBLAUD_CODEX_BIN` | `codex` from PATH (on Windows, `codex.exe`) | The Codex binary that delivers the messages (`codex queue`), in Node mode or in `npm run codex:bridge`. |
+| `HABBLAUD_OPENCODE` | off | `1` turns on the local OpenCode observer (sessions, terminal, history, messages and permissions). |
+| `HABBLAUD_OPENCODE_URL` | automatic discovery; otherwise `http://127.0.0.1:4096` | Local origin of the OpenCode HTTP v2 API, used when the service registration isn't valid; loopback only. |
+| `HABBLAUD_OPENCODE_PASSWORD` | — | Basic Auth password for the explicit URL, matching `OPENCODE_SERVER_PASSWORD`. Don't commit it. |
 | `HABBLAUD_UPDATE_CHECK` | on | `0` turns off the new-version check (a request to the repository's releases on GitHub every 6 h). |
 | `HABBLAUD_LANG` | system language (except English), otherwise `pt-BR` | Language of the texts the server builds (activities, notices, logs): `pt-BR`, `en`, `es` or `fr`. The interface follows the browser or the choice in Settings › Language. See [Languages](#languages). |
 | `HABBLAUD_ACCOUNTS` | — | JSON to customize name, letter or color, matched by the account folder name. E.g. `[{"id":".claude-conta2","name":"Trabalho","short":"T","color":"#5cc97b"}]`. |
