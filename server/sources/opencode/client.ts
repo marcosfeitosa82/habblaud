@@ -7,7 +7,36 @@ export interface OpenCodeSession {
   agent?: string;
   model?: { providerID?: string; modelID?: string };
   location?: { directory?: string };
-  time?: { created?: number; updated?: number };
+  time?: { created?: number; updated?: number; busy?: number; idle?: number; archived?: number };
+  outcome?: 'succeeded' | 'failed' | 'interrupted';
+}
+
+export interface OpenCodeSessionsQuery {
+  limit?: number;
+  order?: 'asc' | 'desc';
+  archived?: boolean;
+  parentID?: string;
+  cursor?: string;
+  directory?: string;
+}
+
+export interface OpenCodeMessagesQuery {
+  limit?: number;
+  order?: 'asc' | 'desc';
+  cursor?: string;
+  type?: string;
+}
+
+/** Pedido de permissão aberto numa sessão (GET /api/session/:id/permission). */
+export interface OpenCodePermission {
+  id: string;
+  sessionID: string;
+  action: string;
+  resources: string[];
+  save?: string[];
+  message?: string;
+  source?: { type: 'tool'; messageID: string; id: string };
+  metadata?: Record<string, unknown>;
 }
 
 export interface OpenCodeApiClientOptions {
@@ -85,22 +114,110 @@ export class OpenCodeApiClient {
     return session;
   }
 
+  async sessions(query: OpenCodeSessionsQuery = {}): Promise<OpenCodeSession[]> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.order) params.set('order', query.order);
+    if (query.archived !== undefined) params.set('archived', String(query.archived));
+    if (query.parentID) params.set('parentID', query.parentID);
+    if (query.cursor) params.set('cursor', query.cursor);
+    if (query.directory) params.set('directory', query.directory);
+    const qs = params.toString();
+    return this.jsonArray<OpenCodeSession>(`/api/session${qs ? `?${qs}` : ''}`, 'lista de sessões', (item) => typeof item.id === 'string' && item.id.length > 0);
+  }
+
+  async messages(sessionId: string, query: OpenCodeMessagesQuery = {}): Promise<unknown[]> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set('limit', String(query.limit));
+    if (query.order) params.set('order', query.order);
+    if (query.cursor) params.set('cursor', query.cursor);
+    if (query.type) params.set('type', query.type);
+    const qs = params.toString();
+    return this.jsonArray<unknown>(`/api/session/${encodeURIComponent(sessionId)}/message${qs ? `?${qs}` : ''}`, 'lista de mensagens');
+  }
+
+  async permissions(sessionId: string): Promise<OpenCodePermission[]> {
+    return this.jsonArray<OpenCodePermission>(
+      `/api/session/${encodeURIComponent(sessionId)}/permission`,
+      'lista de permissões',
+      (item) => typeof item.id === 'string' && typeof item.action === 'string' && Array.isArray(item.resources),
+    );
+  }
+
+  async replyPermission(sessionId: string, requestId: string, decision: 'once' | 'always' | 'reject', message?: string): Promise<void> {
+    await this.post(
+      `/api/session/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}/reply`,
+      { decision, ...(message ? { message } : {}) },
+    );
+  }
+
+  async interrupt(sessionId: string, resume?: boolean): Promise<void> {
+    const qs = resume === undefined ? '' : `?resume=${resume ? 'true' : 'false'}`;
+    await this.post(`/api/session/${encodeURIComponent(sessionId)}/interrupt${qs}`);
+  }
+
+  async prompt(sessionId: string, text: string): Promise<void> {
+    await this.post(`/api/session/${encodeURIComponent(sessionId)}/prompt`, { text });
+  }
+
+  /** Abre o stream SSE; o sinal é do chamador (o timeout curto não vale para eventos). */
+  async eventResponse(signal: AbortSignal): Promise<Response> {
+    return this.send('GET', '/api/event', undefined, signal, { accept: 'text/event-stream' });
+  }
+
+  private async jsonArray<T>(path: string, label: string, valid?: (item: T) => boolean): Promise<T[]> {
+    const response = await this.get<ApiEnvelope<T[]>>(path);
+    const data = response.data;
+    if (!Array.isArray(data) || (valid && !data.every((item) => typeof item === 'object' && item !== null && valid(item)))) {
+      throw new Error(`Resposta inválida de ${label}`);
+    }
+    return data;
+  }
+
   private async get<T>(path: string): Promise<T> {
+    const response = await this.send('GET', path, undefined, AbortSignal.timeout(this.timeoutMs));
+    return this.readJson<T>(response);
+  }
+
+  private async post(path: string, body?: unknown): Promise<void> {
+    const response = await this.send(
+      'POST',
+      path,
+      body,
+      AbortSignal.timeout(this.timeoutMs),
+      body === undefined ? undefined : { 'content-type': 'application/json' },
+    );
+    await response.body?.cancel();
+  }
+
+  private async send(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    headers?: Record<string, string>,
+  ): Promise<Response> {
     let response: Response;
     try {
       response = await this.fetchImpl(new URL(path.slice(1), this.baseUrl), {
-        method: 'GET',
-        headers: this.headers,
-        signal: AbortSignal.timeout(this.timeoutMs),
+        method,
+        headers: { ...this.headers, ...headers },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(signal ? { signal } : {}),
       });
     } catch (error) {
       if (error instanceof Error && error.name === 'TimeoutError') throw new Error('Tempo esgotado ao consultar a API OpenCode');
+      if (error instanceof Error && error.name === 'AbortError') throw error;
       throw new Error('Não foi possível conectar à API OpenCode');
     }
     if (!response.ok) {
-      const detail = response.status === 401 ? 'autenticação recusada (confira HABBLAUD_OPENCODE_PASSWORD)' : `HTTP ${response.status}`;
+      const detail = response.status === 401 ? 'autenticação recusada' : `HTTP ${response.status}`;
       throw new Error(`API OpenCode: ${detail}`);
     }
+    return response;
+  }
+
+  private async readJson<T>(response: Response): Promise<T> {
     try {
       return (await response.json()) as T;
     } catch {
