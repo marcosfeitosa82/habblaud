@@ -177,7 +177,7 @@ describe('SessionHistory.resolve', () => {
     const path = session(c, '/projetos/loja', sid(1), [L.prompt('oi')], NOW);
     const h = history([c]);
     const ok = h.resolve('.claude', sid(1));
-    expect('path' in ok && ok.path.endsWith(join(encodeCwd('/projetos/loja'), `${sid(1)}.jsonl`))).toBe(true);
+    expect('path' in ok && ok.path!.endsWith(join(encodeCwd('/projetos/loja'), `${sid(1)}.jsonl`))).toBe(true);
     expect(path.endsWith(`${sid(1)}.jsonl`)).toBe(true);
 
     for (const bad of ['../../etc/passwd', '..', `${sid(1)}/../${sid(1)}`, `${sid(1)}.jsonl`, 'x', '', `${sid(1)} `]) {

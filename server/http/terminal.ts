@@ -17,6 +17,7 @@ import { errMsg, log } from '../log';
 import type { Office } from '../model/office';
 import { FileTail } from '../sources/tail';
 import { createTerminalParser, type TerminalParser } from '../sources/terminal';
+import type { ConversationPoll, ConversationSource, HistorySession } from '../sources/source';
 import { sendJson } from './app';
 import { frame } from './sse';
 import { tr } from '../../shared/i18n';
@@ -51,6 +52,8 @@ export interface TerminalOptions {
   parserFor?: (agentId: string) => TerminalParser | undefined;
   /** Fábrica do parser padrão (testes); padrão: createTerminalParser (o do Claude Code). */
   createParser?: () => TerminalParser;
+  /** Conversa de agentes sem transcript em arquivo (SourceSet.conversationOf). */
+  conversationOf?: (agentId: string) => ConversationSource | undefined;
   /** Conversa fictícia dos agentes do demo (testes); padrão: demoTerminalEntries. */
   demoEntries?: (agent: AgentInfo, history: Activity[]) => TerminalEntry[];
   maxStreams?: number;
@@ -63,19 +66,10 @@ export interface TerminalOptions {
 }
 
 /** O que mudou desde o último ciclo: `init` substitui tudo; `stop` = não há mais o que acompanhar. */
-interface PollResult {
-  init?: TerminalInit;
-  append?: TerminalEntry[];
-  stop?: boolean;
-}
+type PollResult = ConversationPoll;
 
-/** De onde vem a conversa de uma conexão. */
-interface ConversationSource {
-  readonly intervalMs: number;
-  /** Conversa recente, para o `init`. */
-  load(): TerminalInit;
-  poll(): PollResult;
-}
+/** De onde vem a conversa de uma conexão (arquivo, demo ou API da ferramenta). */
+type Source = ConversationSource;
 
 /** Passa as linhas pelo parser; uma linha que o faça falhar é pulada sem perder o resto do lote. */
 function parseInto(parser: TerminalParser, lines: readonly string[], out: TerminalEntry[]): void {
@@ -186,6 +180,8 @@ class DemoSource implements ConversationSource {
 interface Stream {
   res: ServerResponse;
   timer: ReturnType<typeof setInterval> | null;
+  /** Um poll em andamento (a conversa pela API é assíncrona): não sobrepõe ciclos. */
+  busy: boolean;
 }
 
 export class TerminalStreams {
@@ -232,31 +228,40 @@ export class TerminalStreams {
   attach(req: IncomingMessage, res: ServerResponse, agentId: string): void {
     const source = this.sourceFor(agentId);
     if (typeof source === 'string') return sendJson(res, 404, { error: source });
-    this.serve(req, res, agentId, source);
+    void this.serve(req, res, agentId, source);
   }
 
   /**
-   * Abre a conversa de uma sessão do histórico pelo transcript `path` (a rota já validou conta, id e caminho).
-   * `streamId` vai no `init` (ex.: "session:<conta>:<sessionId>"); `createParser` é o da ferramenta da sessão
-   * (HistorySession.createParser; padrão: o do Claude Code). Mesmos erros de attach (429/500).
+   * Abre a conversa de uma sessão do histórico pelo transcript `path` (a rota já validou conta, id e caminho)
+   * ou pela API da ferramenta (`conversation`). `streamId` vai no `init` (ex.: "session:<conta>:<sessionId>").
+   * Mesmos erros de attach (429/500).
    */
-  attachSession(req: IncomingMessage, res: ServerResponse, streamId: string, path: string, createParser?: () => TerminalParser): void {
-    const o = { transcriptPathOf: () => undefined, createParser: createParser ?? this.createParser, initTailBytes: this.initTailBytes, initEntries: this.initEntries };
-    this.serve(req, res, streamId, new TranscriptSource(streamId, path, o, this.sessionPollMs));
+  attachSession(req: IncomingMessage, res: ServerResponse, streamId: string, session: HistorySession): void {
+    if (session.conversation) return this.attachConversation(req, res, streamId, session.conversation());
+    if (!session.path) return sendJson(res, 404, { error: tr('transcript do agente não encontrado') });
+    const o = { transcriptPathOf: () => undefined, createParser: session.createParser ?? this.createParser, initTailBytes: this.initTailBytes, initEntries: this.initEntries };
+    void this.serve(req, res, streamId, new TranscriptSource(streamId, session.path, o, this.sessionPollMs));
+  }
+
+  /** Abre a conversa de uma sessão do histórico que vem de uma API (sem transcript). */
+  attachConversation(req: IncomingMessage, res: ServerResponse, streamId: string, source: ConversationSource): void {
+    void this.serve(req, res, streamId, source);
   }
 
   /** Limite de terminais, `init` e o stream SSE de uma fonte já escolhida. */
-  private serve(req: IncomingMessage, res: ServerResponse, id: string, source: ConversationSource): void {
+  private async serve(req: IncomingMessage, res: ServerResponse, id: string, source: ConversationSource): Promise<void> {
     if (this.streams.size >= this.maxStreams) {
       return sendJson(res, 429, { error: tr('terminais abertos demais (máximo de {0}); feche algum e tente de novo', [this.maxStreams]) });
     }
     let init: TerminalInit;
     try {
-      init = source.load();
+      init = await source.load();
     } catch (err) {
-      log.warnOnce(`terminal-load:${id}:${errMsg(err)}`, tr('Terminal de {0}: não foi possível ler o transcript ({1}).', [id, errMsg(err)]));
-      return sendJson(res, 500, { error: tr('não foi possível ler o transcript') });
+      log.warnOnce(`terminal-load:${id}:${errMsg(err)}`, tr('Terminal de {0}: não foi possível carregar a conversa ({1}).', [id, errMsg(err)]));
+      if (!res.headersSent) return sendJson(res, 500, { error: tr('não foi possível carregar a conversa') });
+      return;
     }
+    if (res.destroyed || res.writableEnded) return;
     req.socket.setTimeout(0);
     req.socket.setNoDelay(true);
     res.writeHead(200, {
@@ -266,10 +271,10 @@ export class TerminalStreams {
       'X-Accel-Buffering': 'no',
     });
     res.write('retry: 2000\n\n');
-    const s: Stream = { res, timer: null };
+    const s: Stream = { res, timer: null, busy: false };
     this.streams.add(s);
     this.write(s, frame('init', init));
-    s.timer = setInterval(() => this.pump(s, source, id), source.intervalMs);
+    s.timer = setInterval(() => void this.pump(s, source, id), source.intervalMs);
     s.timer.unref?.();
     const drop = () => this.drop(s);
     req.on('close', drop);
@@ -287,6 +292,9 @@ export class TerminalStreams {
   private sourceFor(agentId: string): ConversationSource | string {
     const office = this.opts.office;
     if (office.has(agentId)) {
+      // Ferramentas que expõem a conversa por API (OpenCode) vêm antes do transcript em arquivo.
+      const conversation = this.opts.conversationOf?.(agentId);
+      if (conversation) return conversation;
       const path = this.opts.transcriptPathOf(agentId);
       if (!path) return tr('transcript do agente não encontrado');
       const parserFor = this.opts.parserFor;
@@ -301,18 +309,23 @@ export class TerminalStreams {
     return tr('agente não encontrado');
   }
 
-  private pump(s: Stream, source: ConversationSource, agentId: string): void {
+  private async pump(s: Stream, source: ConversationSource, agentId: string): Promise<void> {
+    if (s.busy) return;
+    s.busy = true;
     let r: PollResult;
     try {
-      r = source.poll();
+      r = await source.poll();
     } catch (err) {
-      // Ex.: transcript sem permissão de leitura. Tenta de novo no próximo ciclo.
+      // Ex.: transcript sem permissão de leitura ou API fora do ar. Tenta de novo no próximo ciclo.
       log.warnOnce(`terminal:${agentId}:${errMsg(err)}`, tr('Terminal de {0}: {1}', [agentId, errMsg(err)]));
       return;
+    } finally {
+      s.busy = false;
     }
+    if (!this.streams.has(s)) return;
     if (r.init) this.write(s, frame('init', r.init));
     if (r.append?.length) this.write(s, frame('append', r.append));
-    // O agente sumiu (demo desligado ou sessão simulada encerrada): o stream fica aberto só com pings.
+    // O agente sumiu (demo desligado, sessão encerrada ou apagada): o stream fica aberto só com pings.
     if (r.stop && s.timer) {
       clearInterval(s.timer);
       s.timer = null;

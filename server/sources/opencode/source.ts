@@ -22,9 +22,10 @@ import type { DetectedAccount } from '../../accounts/detect';
 import type { AccountEntry, AccountsService } from '../../accounts/service';
 import { errMsg, log } from '../../log';
 import type { Office } from '../../model/office';
-import type { AgentSource } from '../source';
+import type { AgentSource, ConversationSource } from '../source';
 import { describeOpenCodePermission, describeOpenCodeTool } from './activity';
 import { OpenCodeApiClient, type OpenCodePermission, type OpenCodeSession } from './client';
+import { OpenCodeConversation } from './conversation';
 import { discoverEndpoint, type OpenCodeEndpoint } from './discovery';
 import { OpenCodeEventStream, type OpenCodeEvent, type OpenCodeEventStreamOptions } from './events';
 
@@ -200,6 +201,14 @@ export class OpenCodeSource implements AgentSource {
 
   transcriptPathOf(_agentId: string): undefined {
     return undefined;
+  }
+
+  /** Conversa do agente principal pela API (o terminal e a sessão do histórico usam). */
+  conversationOf(agentId: string): ConversationSource | undefined {
+    const client = this.client;
+    const sessionId = this.sessionOf.get(agentId);
+    if (!client || !sessionId || !this.present.has(agentId)) return undefined;
+    return new OpenCodeConversation({ client, sessionId, agentId });
   }
 
   // ---------------------------------------------------------------- conexão e reconciliação

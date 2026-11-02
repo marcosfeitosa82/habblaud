@@ -12,7 +12,7 @@
 // depois, SEMPRE em par (num `finally`, inclusive num boot assíncrono). O Office conta os boots: enquanto alguma
 // fonte boota não há avisos e o feed fica guardado para sair em ordem cronológica no fim do último boot (uma fonte
 // que nunca chamasse endBoot calaria os avisos de todas).
-import type { Provider, RecentSession, SourceInfo } from '../../shared/types';
+import type { Provider, RecentSession, SourceInfo, TerminalEntry, TerminalInit } from '../../shared/types';
 import { errMsg, log } from '../log';
 import { HISTORY_LIMIT } from './history';
 import { createTerminalParser, type TerminalParser } from './terminal';
@@ -36,6 +36,26 @@ export interface AgentSource {
    * Ausente, ou undefined, = o do Claude Code (createTerminalParser).
    */
   terminalParser?(agentId: string): TerminalParser | undefined;
+  /** Conversa de um agente desta fonte quando ela não vem de um transcript (ex.: API do OpenCode). */
+  conversationOf?(agentId: string): ConversationSource | undefined;
+}
+
+/** O que mudou desde o último ciclo da conversa: `init` substitui tudo; `stop` = não há mais o que acompanhar. */
+export interface ConversationPoll {
+  init?: TerminalInit;
+  append?: TerminalEntry[];
+  stop?: boolean;
+}
+
+/**
+ * Conversa de um agente sem transcript em arquivo. `load()` e `poll()` podem ser assíncronos (a conversa do
+ * OpenCode vem da API HTTP); o terminal espera a resposta antes de mandar o `init`/`append`.
+ */
+export interface ConversationSource {
+  readonly intervalMs: number;
+  /** Conversa recente, para o `init`. */
+  load(): TerminalInit | Promise<TerminalInit>;
+  poll(): ConversationPoll | Promise<ConversationPoll>;
 }
 
 /** Todas as fontes de agentes ligadas, vistas como uma só. */
@@ -110,15 +130,29 @@ export class SourceSet {
     const owner = this.list.find((s) => s.transcriptPathOf(agentId) !== undefined);
     return owner?.terminalParser?.(agentId) ?? createTerminalParser();
   }
+
+  /** Conversa da fonte que conhece o agente (API, sem transcript), se houver. */
+  conversationOf(agentId: string): ConversationSource | undefined {
+    for (const s of this.list) {
+      const conversation = s.conversationOf?.(agentId);
+      if (conversation) return conversation;
+    }
+    return undefined;
+  }
 }
 
 // ------------------------------------------------------------------ histórico do terminal
 
-/** Sessão do histórico achada: o arquivo da conversa e o parser do terminal para ele. */
+/**
+ * Sessão do histórico achada: um arquivo de conversa com o parser do terminal ou, para ferramentas que só
+ * expõem a conversa por API (OpenCode), uma fábrica de ConversationSource.
+ */
 export interface HistorySession {
-  path: string;
+  path?: string;
   /** Parser NOVO a cada chamada (o terminal cria outro quando o arquivo é truncado ou substituído). */
-  createParser: () => TerminalParser;
+  createParser?: () => TerminalParser;
+  /** Conversa pela API da ferramenta (sem transcript): usada no lugar de `path`. */
+  conversation?: () => ConversationSource;
 }
 
 /** Resultado de resolve(): a sessão ou o erro HTTP. */

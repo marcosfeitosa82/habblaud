@@ -13,6 +13,7 @@ import { setQuiet } from '../log';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import type { TerminalParser } from '../sources/terminal';
+import type { ConversationSource } from '../sources/source';
 import { ClaudeWatcher, encodeCwd } from '../sources/watcher';
 import { appendLines, L, tempDir, writeLines } from '../test/fixtures';
 import { createApiHandler } from './app';
@@ -482,6 +483,27 @@ describe('terminal: transporte', () => {
       expect(env.office.get(MAIN)?.provider).toBeUndefined();
       sa.close();
       sb.close();
+    } finally {
+      await env.close();
+    }
+  });
+
+  it('conversa pela API (conversationOf), sem transcript: init e append assíncronos', async () => {
+    let polls = 0;
+    const conv: ConversationSource = {
+      intervalMs: 20,
+      load: async () => ({ agentId: MAIN, entries: [user('api-1')], truncated: false }),
+      poll: async () => (++polls === 1 ? { append: [user('api-2')] } : { append: [] }),
+    };
+    const env = await serve({ streams: { conversationOf: (id) => (id === MAIN ? conv : undefined) } });
+    try {
+      // Sem transcript: a conversa da fonte vem antes do caminho do arquivo.
+      const s = await open(env.base, route(MAIN));
+      expect(s.status).toBe(200);
+      await waitFor(() => expect(inits(s)).toHaveLength(1));
+      expect(inits(s)[0]).toEqual({ agentId: MAIN, entries: [user('api-1')], truncated: false });
+      await waitFor(() => expect(appendIds(s)).toEqual(['api-2']));
+      s.close();
     } finally {
       await env.close();
     }

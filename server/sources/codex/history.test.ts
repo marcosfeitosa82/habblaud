@@ -62,7 +62,7 @@ describe('histórico do Codex', () => {
     const path = home.rollout(A, [R.meta(A), R.user(A, 't', 'u', 'oi')]);
     const r = history.resolve('.codex', A);
     expect('path' in r && r.path).toContain(`rollout-2026-10-09T09-00-00-${A}.jsonl`);
-    if ('path' in r) expect(r.createParser().push(R.user(A, 't', 'u2', 'olá'))[0]).toMatchObject({ kind: 'user', text: 'olá' });
+    if ('path' in r && r.path) expect(r.createParser!().push(R.user(A, 't', 'u2', 'olá'))[0]).toMatchObject({ kind: 'user', text: 'olá' });
     expect(path).toBeTruthy();
     expect(history.resolve('.codex', '../../etc/passwd')).toEqual({ status: 400, error: 'id de sessão inválido' });
     expect(history.resolve('.outra', A)).toEqual({ status: 404, error: 'conta desconhecida' });

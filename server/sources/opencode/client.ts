@@ -50,6 +50,17 @@ interface ApiEnvelope<T> {
   data?: T;
 }
 
+/** Erro de uma chamada HTTP da API do OpenCode; `status` ausente = nem chegou a responder. */
+export class OpenCodeApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'OpenCodeApiError';
+  }
+}
+
 function loopbackOnly(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
   return host === 'localhost' || host === '::1' || (isIP(host) === 4 && host.startsWith('127.'));
@@ -212,7 +223,7 @@ export class OpenCodeApiClient {
     }
     if (!response.ok) {
       const detail = response.status === 401 ? 'autenticação recusada' : `HTTP ${response.status}`;
-      throw new Error(`API OpenCode: ${detail}`);
+      throw new OpenCodeApiError(`API OpenCode: ${detail}`, response.status);
     }
     return response;
   }

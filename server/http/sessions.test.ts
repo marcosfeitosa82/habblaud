@@ -13,7 +13,7 @@ import { setQuiet } from '../log';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import { openMainAgent, SessionHistory } from '../sources/history';
-import { HistorySet, type HistoryProvider } from '../sources/source';
+import { HistorySet, type ConversationSource, type HistoryProvider } from '../sources/source';
 import { encodeCwd } from '../sources/watcher';
 import { appendLines, L, symlinkOrSkip, tempDir, writeLines } from '../test/fixtures';
 import { createApiHandler } from './app';
@@ -296,6 +296,42 @@ describe('histórico de sessões: outra ferramenta', () => {
       expect((await request(env.base, terminalRoute('.codex', '00000000-0000-4000-8000-000000000999'))).status).toBe(404);
       expect(JSON.parse((await request(env.base, terminalRoute('.outra', SID))).body)).toEqual({ error: 'conta desconhecida' });
       expect((await request(env.base, terminalRoute('.outra', 'x'))).status).toBe(400);
+    } finally {
+      await env.close();
+    }
+  });
+
+  it('sessão sem transcript: conversation da ferramenta serve o SSE', async () => {
+    const apiHistory = (): HistoryProvider => {
+      const conversation: ConversationSource = {
+        intervalMs: 20,
+        load: async () => ({
+          agentId: `session:.opencode:${XID}`,
+          entries: [{ kind: 'user', id: 'api-1', at: 0, text: 'oi' }],
+          truncated: false,
+        }),
+        poll: async () => ({ append: [{ kind: 'assistant', id: 'api-2', at: 0, text: 'olá' }] }),
+      };
+      return {
+        provider: 'opencode',
+        hasAccount: (a) => a === '.opencode',
+        list: async () => [],
+        resolve: (account, sessionId) =>
+          account === '.opencode' && sessionId === XID
+            ? { conversation: () => conversation }
+            : { status: 404, error: 'sessão não encontrada' },
+      };
+    };
+    const env = await serve({ extra: () => apiHistory() });
+    try {
+      const s = await request(env.base, terminalRoute('.opencode', XID));
+      expect(s.status).toBe(200);
+      await waitFor(() => expect(s.events.filter((e) => e.event === 'init')).toHaveLength(1));
+      expect((s.events[0].data as TerminalInit).entries.map((e) => e.id)).toEqual(['api-1']);
+      await waitFor(() => expect(s.events.filter((e) => e.event === 'append')).toHaveLength(1));
+      expect((s.events[1].data as TerminalEntry[]).map((e) => e.id)).toEqual(['api-2']);
+      s.close();
+      expect((await request(env.base, terminalRoute('.opencode', 'x'))).status).toBe(404);
     } finally {
       await env.close();
     }
