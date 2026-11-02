@@ -46,6 +46,8 @@ export function expiryText(expiresAt: number, now: number, seconds = false): str
 
 /** Aviso do cartão de um pedido do Codex. */
 export const CODEX_PERMISSION_NOTE = tr('No Codex, a aprovação só aparece no terminal depois que você responder aqui ou o prazo acabar.');
+/** Aviso do cartão de um pedido do OpenCode. */
+export const OPENCODE_PERMISSION_NOTE = tr('No OpenCode, a resposta daqui vai direto para a sessão; o pedido continua aberto no terminal dele até lá.');
 
 /** O que o cartão oferece para um pedido (muda com a ferramenta). */
 export interface PermissionOptions {
@@ -63,6 +65,7 @@ export interface PermissionOptions {
 
 export function permissionOptions(p: Pick<PermissionRequestInfo, 'provider' | 'suggestions'>, agent: Pick<AgentInfo, 'kind' | 'background'>): PermissionOptions {
   if (p.provider === 'codex') return { always: false, interrupt: false, reasonRequired: true, seconds: true, note: CODEX_PERMISSION_NOTE };
+  if (p.provider === 'opencode') return { always: false, interrupt: true, reasonRequired: false, seconds: false, note: OPENCODE_PERMISSION_NOTE };
   // Subagente em segundo plano: o Claude Code só mostra o diálogo depois que o hook responde.
   const blocking = agent.kind === 'sub' && !!agent.background;
   return {

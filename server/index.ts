@@ -81,7 +81,7 @@ const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
 roomAliases.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string } = {};
+const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; opencode?: OpenCodeSource; ptys?: PtyManager; ptyOff?: string } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -148,9 +148,37 @@ const opencode = config.opencode
       baseUrl: config.opencodeUrl,
       password: config.opencodePassword,
       env: process.env,
+      // Pedido de permissão visto na API: vira o cartão do escritório. A resposta volta por `replyPermission`
+      // (allow → once, deny → reject + motivo) e, com "interromper", também para o agente.
+      onPermission: (notice) => {
+        late.permissions?.askExternal({
+          provider: 'opencode',
+          agentId: notice.agentId,
+          sessionId: notice.sessionId,
+          requestId: notice.requestId,
+          action: notice.action,
+          resources: notice.resources,
+          ...(notice.message ? { message: notice.message } : {}),
+          onDecide: (d) => {
+            const client = late.opencode?.api();
+            if (!client) return;
+            void client
+              .replyPermission(notice.sessionId, notice.requestId, d.behavior === 'allow' ? 'once' : 'reject', d.behavior === 'deny' ? d.message : undefined)
+              .then(() => (d.behavior === 'deny' && d.interrupt ? client.interrupt(notice.sessionId) : undefined))
+              .catch((err: unknown) => {
+                const msg = errMsg(err);
+                log.warnOnce(`opencode-permission:${msg}`, tr('OpenCode: falha ao responder a permissão ({0}).', [msg]));
+              });
+          },
+        });
+      },
+      onPermissionGone: (sessionId, requestId) => late.permissions?.resolveExternal('opencode', sessionId, requestId),
     })
   : undefined;
-if (opencode) agents.add(opencode);
+if (opencode) {
+  agents.add(opencode);
+  late.opencode = opencode;
+}
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
 const codexLive: CodexLive | undefined = codex;
@@ -301,6 +329,16 @@ const messages = config.messages
         run: codexBin ? createCodexQueueRunner(codexBin) : undefined,
         homeOf: (account) => accounts.entriesOf('codex').find((e) => e.id === account)?.detected.configDir,
       },
+      // OpenCode: a mensagem entra na sessão pela API local (`prompt`), como se o usuário a tivesse digitado.
+      opencode: opencode
+        ? {
+            prompt: async (sessionId, text) => {
+              const client = opencode.api();
+              if (!client) throw new Error(tr('serviço OpenCode indisponível'));
+              await client.prompt(sessionId, text);
+            },
+          }
+        : undefined,
     })
   : undefined;
 late.messages = messages;

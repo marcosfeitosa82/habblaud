@@ -10,12 +10,15 @@ import {
   ERR_GONE,
   ERR_NOT_CONFIRMED,
   ERR_NOT_FETCHED,
+  ERR_OPENCODE_SLOW,
+  ERR_OPENCODE_UNAVAILABLE,
   ERR_REFUSED,
   ERR_SESSION_CHANGED,
   INBOX_BATCH,
   KEEP_MS,
   MAX_OPEN,
   MessageRegistry,
+  type MessageRegistryOptions,
   PRESENCE_MS,
   QUEUED_TIMEOUT_MS,
   SENT_TIMEOUT_MS,
@@ -28,8 +31,10 @@ const MAIN = 'acc:1';
 const SESSION = 'sess-1';
 const OTHER = 'acc:2';
 const SUB = `${SESSION}:a1b2c3`;
+const OC = 'occ:1';
+const OC_SESSION = 'ses_abc';
 
-function setup() {
+function setup(extra: Partial<MessageRegistryOptions> = {}) {
   let now = 1_000_000;
   const clock = { now: () => now, advance: (ms: number) => (now += ms) };
   let registry: MessageRegistry | undefined;
@@ -45,14 +50,19 @@ function setup() {
   });
   office.addMain({ id: MAIN, account: 'acc', sessionId: SESSION, cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'idle' });
   office.addMain({ id: OTHER, account: 'acc', sessionId: 'sess-2', cwd: '/p/api', role: 'Agente principal', startedAt: 0, status: 'idle' });
+  office.addMain({ id: OC, provider: 'opencode', account: 'occ', sessionId: OC_SESSION, cwd: '/p/oc', role: 'Agente principal', startedAt: 0, status: 'idle' });
   registry = new MessageRegistry({
     office,
     demoAgent: (id) => office.demoAgent(id),
     demoDeliver: (id, text) => office.deliverDemoMessage(id, text),
     now: clock.now,
+    ...extra,
   });
   return { office, registry, clock };
 }
+
+/** Deixa as promessas do `prompt` do OpenCode resolverem. */
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const snapAgent = (office: Office, id: string): AgentInfo | undefined => office.commit().snapshot.agents.find((a) => a.id === id);
 
@@ -295,6 +305,96 @@ describe('MessageRegistry: prazos e limpeza', () => {
     registry.tick();
     expect(registry.get(id)).toBeUndefined();
     expect(registry.size).toBe(0);
+  });
+});
+
+describe('MessageRegistry: OpenCode pela API local', () => {
+  it('sem entregador (opencode ausente): não recebe, e o envio diz que o serviço está indisponível', () => {
+    const { office, registry } = setup();
+    office.commit();
+    expect(registry.canMessage(OC)).toBe(false);
+    expect(registry.reachable().has(OC)).toBe(false);
+    expect(registry.send({ agentId: OC, text: 'oi' })).toEqual({ error: 'unavailable', reason: ERR_OPENCODE_UNAVAILABLE });
+    // Continua sem canMessage no snapshot.
+    const snap = office.commit();
+    expect(snap.snapshot.agents.find((a) => a.id === OC)?.canMessage).toBeUndefined();
+  });
+
+  it('com o entregador: canMessage já no snapshot e o prompt recebe a sessão e o texto intacto', async () => {
+    const calls: Array<[string, string]> = [];
+    const { office, registry } = setup({
+      opencode: { prompt: async (sessionId, text) => void calls.push([sessionId, text]) },
+    });
+    const snap = office.commit();
+    const oc = snap.snapshot.agents.find((a) => a.id === OC);
+    expect(oc?.canMessage).toBe(true);
+    expect(registry.canMessage(OC)).toBe(true);
+    expect(registry.reachable().has(OC)).toBe(true);
+
+    const id = sent(registry.send({ agentId: OC, text: '  oi\nmundo  ' }));
+    expect(calls).toEqual([[OC_SESSION, '  oi\nmundo  ']]);
+    expect(registry.get(id)?.status).toBe('sent');
+    await flush();
+    expect(registry.get(id)?.status).toBe('delivered');
+    // Não passa pela caixa de entrada do plugin (nem a entrega nem uma rodada posterior).
+    expect(registry.inbox({ session: OC_SESSION })).toEqual([]);
+    expect(registry.get(id)?.status).toBe('delivered');
+  });
+
+  it('a API recusou o prompt: failed com o motivo e sem nova tentativa', async () => {
+    const calls: string[] = [];
+    const { registry, clock } = setup({
+      opencode: {
+        prompt: async (_sessionId, text) => {
+          calls.push(text);
+          throw new Error('serviço fora do ar');
+        },
+      },
+    });
+    const id = sent(registry.send({ agentId: OC, text: 'oi' }));
+    await flush();
+    expect(registry.get(id)).toMatchObject({ status: 'failed', error: 'serviço fora do ar' });
+    // O relógio não reenvia uma mensagem resolvida.
+    clock.advance(60_000);
+    registry.tick();
+    await flush();
+    expect(calls).toEqual(['oi']);
+    expect(registry.get(id)?.status).toBe('failed');
+  });
+
+  it('uma mensagem por agente de cada vez, na ordem: a próxima só sai quando a API aceita a anterior', async () => {
+    const calls: Array<{ sessionId: string; text: string; resolve: () => void }> = [];
+    const { registry } = setup({
+      opencode: {
+        prompt: (sessionId, text) => new Promise<void>((resolve) => calls.push({ sessionId, text, resolve })),
+      },
+    });
+    const first = sent(registry.send({ agentId: OC, text: 'primeira' }));
+    const second = sent(registry.send({ agentId: OC, text: 'segunda' }));
+    expect(calls.map((c) => c.text)).toEqual(['primeira']);
+    expect(registry.get(first)?.status).toBe('sent');
+    expect(registry.get(second)?.status).toBe('queued');
+
+    calls[0].resolve();
+    await flush();
+    expect(registry.get(first)?.status).toBe('delivered');
+    expect(calls.map((c) => c.text)).toEqual(['primeira', 'segunda']);
+
+    calls[1].resolve();
+    await flush();
+    expect(registry.get(second)?.status).toBe('delivered');
+  });
+
+  it('a API que não responde em 30 s falha com o motivo do OpenCode (e a caixa de entrada nunca a pega)', () => {
+    const { registry, clock } = setup({ opencode: { prompt: () => new Promise<void>(() => undefined) } });
+    const id = sent(registry.send({ agentId: OC, text: 'parada' }));
+    expect(registry.inbox({ session: OC_SESSION })).toEqual([]);
+    clock.advance(SENT_TIMEOUT_MS - 1);
+    registry.tick();
+    expect(registry.get(id)?.status).toBe('sent');
+    clock.advance(1);
+    registry.tick();
+    expect(registry.get(id)).toMatchObject({ status: 'failed', error: ERR_OPENCODE_SLOW });
   });
 });
 

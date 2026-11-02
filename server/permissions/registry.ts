@@ -18,8 +18,9 @@
 import { randomBytes } from 'node:crypto';
 import { describeTool, maskSecrets, truncate } from '../../shared/activity';
 import { ANSWER_OTHER_MAX, answerSummary, ASK_TOOL, checkAnswers } from '../../shared/answers';
-import type { Activity, AgentInfo, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo } from '../../shared/types';
+import type { Activity, AgentInfo, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo, Provider } from '../../shared/types';
 import { errMsg, log } from '../log';
+import { describeOpenCodePermission } from '../sources/opencode/activity';
 import { toolView } from '../sources/terminal';
 import { codexToolView } from './codex';
 import { callSignature, scanToolCall } from './transcript';
@@ -48,6 +49,9 @@ export const MAX_PENDING = 32;
  * subagentes em segundo plano o terminal só mostra o diálogo quando o hook termina).
  */
 export const UNWATCHED_MS = 5 * 60_000;
+
+/** Tempo do cartão de um pedido externo (a ferramenta segue esperando no terminal dela). */
+export const EXTERNAL_TIMEOUT_MS = 10 * 60_000;
 
 const DESTINATIONS = new Set(['session', 'localSettings', 'projectSettings', 'userSettings']);
 const MAX_SUGGESTIONS = 4;
@@ -91,6 +95,18 @@ export interface RegistryOptions {
   maxPending?: number;
 }
 
+/** Pedido de permissão vindo da API de uma ferramenta (não de um hook): a decisão volta por `onDecide`. */
+export interface ExternalPermissionInput {
+  provider: 'opencode';
+  agentId: string;
+  sessionId: string;
+  requestId: string;
+  action: string;
+  resources: string[];
+  message?: string;
+  onDecide: (d: PermissionDecision) => void;
+}
+
 export type SkipReason = 'no-viewers' | 'unknown-session' | 'unsupported-tool' | 'too-many';
 export type RegisterResult = { id: string; expiresAt: number } | { skip: SkipReason };
 export type ReleaseReason = 'terminal' | 'answered' | 'expired' | 'orphan' | 'gone' | 'unwatched' | 'shutdown';
@@ -132,6 +148,8 @@ interface Pending {
   info: PermissionRequestInfo;
   /** Pedido do Codex (sem a busca da resposta no transcript). */
   codex?: boolean;
+  /** Pedido do OpenCode (vem da API, não de um hook): a decisão volta por `onDecide`, uma única vez. */
+  external?: { key: string; onDecide: (d: PermissionDecision) => void };
   /** Pergunta (AskUserQuestion): o formato de `tool_input.questions`, por posição (undefined = entrada inválida). */
   askFormat?: Array<AskFormat | undefined>;
   agentId: string;
@@ -164,6 +182,11 @@ function shortStr(v: unknown, max: number): string | undefined {
 
 function isIndex(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0;
+}
+
+/** Chave estável de um pedido externo (a mesma do `permission.replied` da ferramenta). */
+function externalKey(provider: Provider, sessionId: string, requestId: string): string {
+  return `${provider}:${sessionId}:${requestId}`;
 }
 
 /** Pedido que se responde com `answer` (as perguntas do AskUserQuestion; o Codex não as manda pelo hook). */
@@ -447,6 +470,75 @@ export class PermissionRegistry {
     return { id, expiresAt: info.expiresAt + EXPIRY_GRACE_MS };
   }
 
+  /**
+   * Publica um pedido que veio da API de uma ferramenta (OpenCode). true = o cartão foi criado; false = sem página
+   * aberta, agente desconhecido/ausente, sessão que não é a dele ou pedidos demais (o terminal da ferramenta segue
+   * com o diálogo). Repetir o mesmo pedido não duplica o cartão.
+   */
+  askExternal(input: ExternalPermissionInput): boolean {
+    const agent = this.opts.office.get(input.agentId);
+    if (!agent || agent.provider !== input.provider || !present(agent) || agent.sessionId !== input.sessionId) return false;
+    if (this.opts.viewers() <= 0) return false;
+    const key = externalKey(input.provider, input.sessionId, input.requestId);
+    for (const p of this.pending.values()) if (p.external?.key === key && !p.outcome) return true;
+    if (this.size >= this.maxPending) return false;
+
+    const now = this.now();
+    const id = `p-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
+    const desc = describeOpenCodePermission(input.action, input.resources, input.message);
+    const info: PermissionRequestInfo = {
+      id,
+      provider: input.provider,
+      tool: input.action,
+      title: desc.title,
+      text: desc.text,
+      icon: desc.icon,
+      createdAt: now,
+      expiresAt: now + EXTERNAL_TIMEOUT_MS,
+    };
+    if (desc.input) info.input = desc.input;
+    if (desc.inputKind) info.inputKind = desc.inputKind;
+
+    const p: Pending = {
+      info,
+      agentId: input.agentId,
+      sessionId: input.sessionId,
+      signature: '',
+      lastScanAt: 0,
+      waiters: new Set(),
+      idleSince: now,
+      external: { key, onDecide: input.onDecide },
+    };
+    this.pending.set(id, p);
+    this.opts.office.addActivity(input.agentId, { id: `${input.agentId}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(tr('Pede permissão: {0}', [desc.text]), 46), detail: desc.title, tool: 'PermissionRequest' }, false);
+    this.opts.office.noticePermission(input.agentId, desc.text);
+    this.opts.office.markDirty();
+    return true;
+  }
+
+  /** A ferramenta respondeu o pedido por fora (o `permission.replied` dela): tira o cartão, sem decidir. */
+  resolveExternal(provider: Provider, sessionId: string, requestId: string): void {
+    const key = externalKey(provider, sessionId, requestId);
+    for (const [id, p] of this.pending) {
+      if (p.external?.key !== key) continue;
+      if (!p.outcome) this.release(p, 'answered');
+      else this.pending.delete(id);
+      return;
+    }
+  }
+
+  /** Descarta os pedidos de uma sessão que saiu (sem entregar decisão a ninguém). */
+  dropSession(sessionId: string): void {
+    let changed = false;
+    for (const [id, p] of [...this.pending]) {
+      if (p.sessionId !== sessionId) continue;
+      changed = true;
+      if (!p.outcome) this.release(p, 'gone');
+      else this.pending.delete(id);
+    }
+    if (changed) this.opts.office.markDirty();
+  }
+
   /** Detalhe completo de um pedido em aberto (com os argumentos), ou undefined. */
   detail(id: string): PermissionRequestInfo | undefined {
     const p = this.pending.get(id);
@@ -516,6 +608,12 @@ export class PermissionRegistry {
     }
     if (wrongKind(p.info, d)) return 'invalid-answer';
     if (d.behavior === 'answer') return this.answer(p, d.answers);
+    // Pedido externo: entrega a decisão à ferramenta ANTES de tirar o cartão (e só uma vez).
+    if (p.external) {
+      const onDecide = p.external.onDecide;
+      delete p.external;
+      onDecide(d);
+    }
     const outcome: WaitResult = { status: 'decided', behavior: d.behavior };
     if (d.message) outcome.message = d.message;
     if (d.interrupt) outcome.interrupt = true;
@@ -555,6 +653,10 @@ export class PermissionRegistry {
         continue;
       }
       if (now >= p.info.expiresAt + EXPIRY_GRACE_MS) this.release(p, 'expired');
+      // Pedido externo não tem hook esperando: o órfão é do terminal da ferramenta, não deste registro.
+      else if (p.external) {
+        if (!present(this.opts.office.get(p.agentId))) this.release(p, 'gone');
+      }
       else if (!p.waiters.size && now - p.idleSince >= this.orphanMs) this.release(p, 'orphan');
       else if (!present(this.opts.office.get(p.agentId))) this.release(p, 'gone');
       else if (unwatched && p.info.expiresAt - p.info.createdAt > DEFAULT_TIMEOUT_MS) this.release(p, 'unwatched');

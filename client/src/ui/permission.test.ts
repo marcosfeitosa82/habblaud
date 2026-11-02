@@ -9,6 +9,7 @@ import {
   isLocalHostname,
   isQuestionRequest,
   nextPermissionAgent,
+  OPENCODE_PERMISSION_NOTE,
   permissionAgents,
   permissionOptions,
   type AskChoice,
@@ -65,6 +66,18 @@ describe('responder pelo escritório (peças puras)', () => {
     expect(permissionOptions({ suggestions }, { kind: 'main' })).toEqual({ always: true, interrupt: true, reasonRequired: false, seconds: false, note: '' });
     expect(permissionOptions({}, { kind: 'main' }).always).toBe(false);
     expect(permissionOptions({}, { kind: 'sub', background: true }).note).toMatch(/^Este subagente roda em segundo plano/);
+  });
+
+  it('cartão do OpenCode: sem "sempre permitir" nem prazo curto, interromper disponível e o aviso da API', () => {
+    const suggestions = [{ index: 0, rules: ['shell(npm test)'], destination: 'localSettings' }];
+    expect(permissionOptions({ provider: 'opencode', suggestions }, { kind: 'main' })).toEqual({
+      always: false,
+      interrupt: true,
+      reasonRequired: false,
+      seconds: false,
+      note: OPENCODE_PERMISSION_NOTE,
+    });
+    expect(OPENCODE_PERMISSION_NOTE).toBe('No OpenCode, a resposta daqui vai direto para a sessão; o pedido continua aberto no terminal dele até lá.');
   });
 
   it('destinationLabel', () => {

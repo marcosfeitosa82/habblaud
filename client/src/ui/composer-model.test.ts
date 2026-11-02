@@ -10,6 +10,8 @@ import {
   enterSends,
   isSettled,
   messageText,
+  OPENCODE_HINT,
+  OPENCODE_TIMEOUT_ERROR,
   PLUGIN_HINT,
   pollDelay,
   sendStatusText,
@@ -121,6 +123,20 @@ describe('caixa de mensagem (peças puras)', () => {
     expect(composerTip()).toBe('Entra na sessão como se você tivesse digitado. Enter manda; Shift+Enter quebra a linha.');
     expect(timeoutError('codex')).toBe(CODEX_TIMEOUT_ERROR);
     expect(timeoutError()).toBe(TIMEOUT_ERROR);
+  });
+
+  it('OpenCode: a caixa funciona (sem "somente leitura"), com a dica do serviço local e o texto da fila', () => {
+    const oc = (over: Partial<AgentInfo> = {}) => agent({ provider: 'opencode', ...over });
+    expect(composerMode(oc(), ON)).toEqual({ kind: 'ready' });
+    for (const status of ['working', 'waiting', 'shell'] as const) expect(composerMode(oc({ status }), ON).kind).toBe('ready');
+    expect(composerMode(oc({ canMessage: undefined }), ON)).toEqual({ kind: 'hint', text: OPENCODE_HINT });
+    expect(OPENCODE_HINT).toBe('Para mandar mensagens ao OpenCode, o serviço local dele precisa estar rodando nesta máquina');
+    expect(composerMode(oc(), { ...ON, enabled: false })).toEqual({ kind: 'off', text: 'Para responder, use o OpenCode' });
+    expect(composerMode(oc({ kind: 'sub', parentId: 'acc:1' }), ON).kind).toBe('off');
+    expect(composerMode(oc({ status: 'offline' }), ON)).toEqual({ kind: 'off', text: 'Sessão encerrada' });
+    expect(sendStatusText({ phase: 'queued', at: 0 }, 0, 'opencode')).toBe('Na fila: enviando ao OpenCode…');
+    expect(composerTip('opencode')).toMatch(/^Entra na sessão do OpenCode pela API local/);
+    expect(timeoutError('opencode')).toBe(OPENCODE_TIMEOUT_ERROR);
   });
 
   it('consulta da entrega: rápida no começo, mais espaçada depois', () => {

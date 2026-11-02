@@ -8,7 +8,7 @@ import { setQuiet } from '../log';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import { appendLines, L, tempDir, writeLines } from '../test/fixtures';
-import { EXPIRY_GRACE_MS, parseDecision, pickSuggestions, PermissionRegistry, UNWATCHED_MS, type WaitResult } from './registry';
+import { EXTERNAL_TIMEOUT_MS, EXPIRY_GRACE_MS, parseDecision, pickSuggestions, PermissionRegistry, UNWATCHED_MS, type WaitResult } from './registry';
 import { callSignature, scanToolCall } from './transcript';
 
 setQuiet(true);
@@ -16,8 +16,10 @@ setQuiet(true);
 const MAIN = 'acc:1';
 const SESSION = 'sess-1';
 const SUB = `${SESSION}:a1b2c3`;
+const OC = 'occ:1';
+const OC_SESSION = 'ses_oc';
 
-function setup(opts: { viewers?: number; transcript?: string; orphanMs?: number; answerLater?: boolean } = {}) {
+function setup(opts: { viewers?: number; transcript?: string; orphanMs?: number; answerLater?: boolean; opencode?: boolean } = {}) {
   let now = 1_000_000;
   const clock = { now: () => now, advance: (ms: number) => (now += ms) };
   let permissions: PermissionRegistry | undefined;
@@ -32,6 +34,7 @@ function setup(opts: { viewers?: number; transcript?: string; orphanMs?: number;
     now: clock.now,
   });
   office.addMain({ id: MAIN, account: 'acc', sessionId: SESSION, cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'working' });
+  if (opts.opencode) office.addMain({ id: OC, provider: 'opencode', account: 'occ', sessionId: OC_SESSION, cwd: '/p/oc', role: 'Agente principal', startedAt: 0, status: 'working' });
   let viewers = opts.viewers ?? 1;
   const paths = new Map<string, string>();
   if (opts.transcript) paths.set(MAIN, opts.transcript);
@@ -443,6 +446,141 @@ describe('PermissionRegistry: pedidos órfãos', () => {
     const w = registry.wait(id, 25_000)!;
     registry.stop();
     await expect(w.result).resolves.toEqual<WaitResult>({ status: 'released', reason: 'shutdown' });
+  });
+});
+
+describe('PermissionRegistry: pedidos externos (OpenCode)', () => {
+  it('publica o pedido da API como cartão waiting e entrega a decisão uma única vez', () => {
+    const { office, registry, clock } = setup({ opencode: true });
+    office.commit();
+    const decisions: Array<{ behavior: string }> = [];
+    const input = {
+      provider: 'opencode' as const,
+      agentId: OC,
+      sessionId: OC_SESSION,
+      requestId: 'per_1',
+      action: 'shell',
+      resources: ['npm test'],
+      message: 'Rodar os testes do projeto',
+      onDecide: (d: { behavior: string }) => decisions.push(d),
+    };
+    expect(registry.askExternal(input)).toBe(true);
+    const card = snapAgent(office, OC)!;
+    expect(card.status).toBe('waiting');
+    expect(card.permission).toMatchObject({
+      provider: 'opencode',
+      tool: 'shell',
+      title: 'shell(npm test)',
+      createdAt: clock.now(),
+      expiresAt: clock.now() + EXTERNAL_TIMEOUT_MS,
+    });
+    // Os argumentos ficam só no detalhe (com acesso local).
+    expect(registry.detail(card.permission!.id)!.input).toContain('npm test');
+    expect(registry.detail(card.permission!.id)!.input).toContain('Rodar os testes do projeto');
+    // O mesmo pedido repetido (evento + reconciliação) não duplica o cartão.
+    expect(registry.askExternal(input)).toBe(true);
+    expect(registry.size).toBe(1);
+
+    const id = card.permission!.id;
+    expect(registry.decide(id, { behavior: 'allow' })).toBe('ok');
+    expect(decisions).toEqual([{ behavior: 'allow' }]);
+    expect(snapAgent(office, OC)!.permission).toBeUndefined();
+    expect(snapAgent(office, OC)!.status).toBe('working');
+    // Já decidido: outra decisão não chega de novo à ferramenta.
+    expect(registry.decide(id, { behavior: 'deny', message: 'x' })).toBe('conflict');
+    expect(decisions).toHaveLength(1);
+  });
+
+  it('sem página aberta, agente que não é do OpenCode, sessão trocada ou pedidos demais: não publica', () => {
+    const { office, registry, setViewers } = setup({ opencode: true });
+    const base = {
+      provider: 'opencode' as const,
+      agentId: OC,
+      sessionId: OC_SESSION,
+      requestId: 'per_1',
+      action: 'shell',
+      resources: ['ls'],
+      onDecide: () => undefined,
+    };
+    setViewers(0);
+    expect(registry.askExternal(base)).toBe(false);
+    setViewers(1);
+    expect(registry.askExternal({ ...base, agentId: MAIN, sessionId: SESSION })).toBe(false);
+    expect(registry.askExternal({ ...base, sessionId: 'ses_outra' })).toBe(false);
+    expect(registry.askExternal({ ...base, agentId: 'ninguem' })).toBe(false);
+    expect(registry.size).toBe(0);
+    office.closeMain(OC);
+    expect(registry.askExternal(base)).toBe(false);
+    expect(registry.size).toBe(0);
+  });
+
+  it('resolveExternal tira o cartão sem entregar decisão; pedido alheio não mexe em nada', () => {
+    const { office, registry } = setup({ opencode: true });
+    let decided = 0;
+    const input = {
+      provider: 'opencode' as const,
+      agentId: OC,
+      sessionId: OC_SESSION,
+      requestId: 'per_1',
+      action: 'read',
+      resources: ['src/app.ts'],
+      onDecide: () => decided++,
+    };
+    registry.askExternal(input);
+    expect(snapAgent(office, OC)!.permission).toBeDefined();
+
+    registry.resolveExternal('opencode', OC_SESSION, 'per_outro');
+    expect(snapAgent(office, OC)!.permission).toBeDefined();
+    registry.resolveExternal('opencode', OC_SESSION, 'per_1');
+    expect(snapAgent(office, OC)!.permission).toBeUndefined();
+    expect(snapAgent(office, OC)!.status).toBe('working');
+    expect(decided).toBe(0);
+  });
+
+  it('dropSession descarta os pedidos da sessão que saiu, sem decidir; os de outra sessão ficam', () => {
+    const { office, registry } = setup({ opencode: true });
+    let decided = 0;
+    const input = {
+      provider: 'opencode' as const,
+      agentId: OC,
+      sessionId: OC_SESSION,
+      requestId: 'per_1',
+      action: 'shell',
+      resources: ['ls'],
+      onDecide: () => decided++,
+    };
+    registry.askExternal(input);
+    registry.askExternal({ ...input, requestId: 'per_2' });
+    const main = registered(registry.register(hookInput()));
+    expect(registry.size).toBe(3);
+
+    registry.dropSession(OC_SESSION);
+    expect(snapAgent(office, OC)!.permission).toBeUndefined();
+    expect(snapAgent(office, MAIN)!.permission?.id).toBe(main);
+    expect(decided).toBe(0);
+
+    registry.dropSession(SESSION);
+    expect(snapAgent(office, MAIN)!.permission).toBeUndefined();
+    expect(registry.size).toBe(0);
+  });
+
+  it('pedido externo não é órfão: sem hook esperando, o cartão fica até o prazo (10 min)', () => {
+    const { office, registry, clock } = setup({ opencode: true, orphanMs: 1_000 });
+    registry.askExternal({
+      provider: 'opencode',
+      agentId: OC,
+      sessionId: OC_SESSION,
+      requestId: 'per_1',
+      action: 'shell',
+      resources: ['ls'],
+      onDecide: () => undefined,
+    });
+    clock.advance(60_000);
+    registry.tick();
+    expect(snapAgent(office, OC)!.permission).toBeDefined();
+    clock.advance(EXTERNAL_TIMEOUT_MS);
+    registry.tick();
+    expect(snapAgent(office, OC)!.permission).toBeUndefined();
   });
 });
 

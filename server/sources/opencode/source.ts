@@ -643,6 +643,8 @@ export class OpenCodeSource implements AgentSource {
     this.sessionOf.delete(agentId);
     if (this.agentOf.get(sessionId) === agentId) this.agentOf.delete(sessionId);
     this.baseStatus.delete(sessionId);
+    // O cartão de permissão da sessão que saiu do escritório também sai.
+    for (const requestId of this.pending.get(sessionId) ?? []) this.opts.onPermissionGone?.(sessionId, requestId);
     this.pending.delete(sessionId);
     this.shells.delete(sessionId);
   }

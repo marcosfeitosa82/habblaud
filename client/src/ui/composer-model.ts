@@ -10,6 +10,8 @@ import { tr } from '../../../shared/i18n';
 export const PLUGIN_HINT = tr('Para mandar mensagens daqui: npm run mod:install (plugin habblaud-mensagens)');
 /** A mesma dica para um agente do Codex sem entregador (no modo Node o próprio servidor entrega). */
 export const CODEX_BRIDGE_HINT = tr('Para mandar mensagens ao Codex: com o Habblaud no Docker, deixe npm run codex:bridge rodando; no modo Node funciona sozinho');
+/** OpenCode sem o serviço local: a API é o único caminho da mensagem. */
+export const OPENCODE_HINT = tr('Para mandar mensagens ao OpenCode, o serviço local dele precisa estar rodando nesta máquina');
 
 /**
  * - ready: dá para mandar (principal com o plugin conectado, recurso ligado, página local);
@@ -31,19 +33,19 @@ export function composerMode(agent: AgentInfo | undefined, env: ComposerEnv): Co
   if (env.replaying) return { kind: 'off', text: tr('Sem mensagens no timelapse: o escritório mostrado é o de outro momento') };
   if (agent?.kind === 'sub') return { kind: 'off', text: tr('Subagentes não recebem mensagens: escreva para o agente principal') };
   if (!agent || agent.status === 'offline' || agent.status === 'done') return { kind: 'off', text: tr('Sessão encerrada') };
-  if (agent.provider === 'opencode') return { kind: 'off', text: tr('OpenCode está em modo somente leitura nesta integração inicial') };
   const codex = agent.provider === 'codex';
-  if (!env.enabled) return { kind: 'off', text: codex ? tr('Para responder, use o Codex') : tr('Para responder, use o terminal do Claude Code') };
+  const opencode = agent.provider === 'opencode';
+  if (!env.enabled) return { kind: 'off', text: codex ? tr('Para responder, use o Codex') : opencode ? tr('Para responder, use o OpenCode') : tr('Para responder, use o terminal do Claude Code') };
   if (!env.local) return { kind: 'off', text: tr('Para mandar mensagens por aqui, abra o Habblaud por http://localhost (ou 127.0.0.1)') };
-  if (!agent.canMessage) return { kind: 'hint', text: codex ? CODEX_BRIDGE_HINT : PLUGIN_HINT };
+  if (!agent.canMessage) return { kind: 'hint', text: codex ? CODEX_BRIDGE_HINT : opencode ? OPENCODE_HINT : PLUGIN_HINT };
   return { kind: 'ready' };
 }
 
 /** Dica embaixo da caixa (gaveta): como a mensagem entra na sessão. */
 export function composerTip(provider: Provider = 'claude'): string {
-  return provider === 'codex'
-    ? tr('Entra na fila da sessão e vira o próximo prompt quando o Codex terminar o que está fazendo. Enter manda; Shift+Enter quebra a linha.')
-    : tr('Entra na sessão como se você tivesse digitado. Enter manda; Shift+Enter quebra a linha.');
+  if (provider === 'codex') return tr('Entra na fila da sessão e vira o próximo prompt quando o Codex terminar o que está fazendo. Enter manda; Shift+Enter quebra a linha.');
+  if (provider === 'opencode') return tr('Entra na sessão do OpenCode pela API local, como se você tivesse digitado. Enter manda; Shift+Enter quebra a linha.');
+  return tr('Entra na sessão como se você tivesse digitado. Enter manda; Shift+Enter quebra a linha.');
 }
 
 /** O que sai da caixa: o texto como foi digitado, sem os espaços e linhas em branco do fim. */
@@ -87,11 +89,12 @@ export const DELIVERED_SHOW_MS = 12_000;
 export function sendStatusText(s: SendState | undefined, now: number, provider: Provider = 'claude'): string {
   if (!s) return '';
   const codex = provider === 'codex';
+  const opencode = provider === 'opencode';
   switch (s.phase) {
     case 'sending':
       return tr('Enviando…');
     case 'queued':
-      return codex ? tr('Na fila: entregando ao Codex…') : tr('Na fila: esperando a sessão buscar a mensagem…');
+      return codex ? tr('Na fila: entregando ao Codex…') : opencode ? tr('Na fila: enviando ao OpenCode…') : tr('Na fila: esperando a sessão buscar a mensagem…');
     case 'sent':
       return tr('Entregando à sessão…');
     case 'delivered':
@@ -121,9 +124,12 @@ export function pollDelay(elapsed: number): number {
 export const LOST_ERROR = tr('o Habblaud não conhece mais esta mensagem (ele reiniciou?)');
 export const TIMEOUT_ERROR = tr('sem notícia da entrega: confira no terminal do Claude Code');
 export const CODEX_TIMEOUT_ERROR = tr('sem notícia da entrega: confira no Codex');
+export const OPENCODE_TIMEOUT_ERROR = tr('sem notícia da entrega: confira a sessão do OpenCode');
 export const OFFLINE_ERROR = tr('não foi possível falar com o Habblaud');
 
 /** Prazo da consulta acabou sem notícia: onde conferir. */
 export function timeoutError(provider: Provider = 'claude'): string {
-  return provider === 'codex' ? CODEX_TIMEOUT_ERROR : TIMEOUT_ERROR;
+  if (provider === 'codex') return CODEX_TIMEOUT_ERROR;
+  if (provider === 'opencode') return OPENCODE_TIMEOUT_ERROR;
+  return TIMEOUT_ERROR;
 }
