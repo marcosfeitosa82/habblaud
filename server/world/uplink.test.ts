@@ -357,6 +357,10 @@ describe('BuildingUplink: conexão e remessas', () => {
     clock.advance(FAST.pingMs!);
     await waitFor(() => h.world.ws.open.length === 0, 'fechou pelo silêncio');
     expect(h.world.ws.pings).toBe(2);
+
+    // Aguarda o evento close chegar ao cliente e agendar o backoff.
+    await sleep(20);
+
     clock.advance(FAST.backoffMaxMs!);
     await waitFor(() => h.world.ws.connections.length === 2, 'reconectou');
   });
@@ -383,6 +387,10 @@ describe('BuildingUplink: conexão e remessas', () => {
     clock.advance(1);
     await waitFor(() => h.world.ws.open.length === 0, 'fechou no prazo do welcome');
     expect(h.world.ws.connections).toHaveLength(1);
+
+    // Aguarda o evento close chegar ao cliente e agendar o backoff.
+    await sleep(20);
+
     clock.advance(FAST.backoffMaxMs!);
     await waitFor(() => h.world.ws.connections.length === 2, 'segunda tentativa');
     expect(h.world.ws.uplinks).toHaveLength(0);

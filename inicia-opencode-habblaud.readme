@@ -1,0 +1,95 @@
+# README: habblaud + OpenCode juntos
+
+Este repositório já tem uma integração nativa local do OpenCode que mostra sessões, terminal, histórico e permite enviar mensagens e aprovar permissões (v. a commit efb6b71).
+
+O problema mais comum: `$ npm start` falha com:
+
+    npm error code ENOENT
+    npm error path /root/package.json
+
+Isso acontece porque o Habblaud deve ser iniciado **dentro da pasta do projeto** (`/root/habblaud`), não da `/root` raiz do Termux/Proot Alpine.
+
+## Script de inicialização
+
+### Comando rápido (recomendado)
+
+```bash
+# Uma vez — adicione um alias no seu ~/.bashrc ou ~/.profile
+# Rodar a partir de qualquer lugar (inclusive em janelas diferentes do terminal)
+alias habblaud-opencode='cd /root/habblaud && bash inicia-opencode-habblaud.sh'
+
+# Depois, só digite:
+habblaud-opencode
+```
+
+### Uso manual rápido
+
+```bash
+cd /root/habblaud && HABBLAUD_OPENCODE=1 npm start
+```
+
+### Com setup explícito (só se o registro automático não existir)
+
+```bash
+cd /root/habblaud
+# Verifique se o serviço do OpenCode está em /root/.local/state/opencode/service.json
+# Se estiver faltando, inicie o OpenCode normalmente (este é o fluxo recomendado):
+OPENCODE_SERVER_PASSWORD='minha-senha' opencode serve --hostname 127.0.0.1 --port 4096
+# Em outro terminal, conecte a CLI (não é obrigatório para o Habblaud):
+OPENCODE_SERVER_PASSWORD='minha-senha' opencode attach http://127.0.0.1:4096
+# Em seguida, inicie o Habblaud com o conector ligado:
+HABBLAUD_OPENCODE=1 npm start
+```
+
+## O que aparece no escritório
+
+- **Sessões ativas** (as que o serviço informa como em execução) aparecem como trabalhando.
+- **Sessões recentes** (encerradas há menos de 30 minutos) continuam no escritório como ociosas.
+- **Terminal e histórico** mostram a conversa real vinda da API.
+- **Mensagens**: a caixa de mensagem envia um `prompt` para a sessão (como se o usuário a tivesse digitado).
+- **Permissões**: pedidos na API viram cartões "Pede permissão" na gaveta. "Permitir" responde `once`, "Rejeitar" responde `reject` com o motivo, "Interromper" chama `/interrupt`.
+
+## Limites (por design)
+
+- **Sem replay de eventos:** o stream SSE não tem replay; o Habblaud reconcilia com `/api/session` e `/api/session/active` a cada 15 s.
+- **World fora do escopo:** as sessões `opencode` continuam excluídas da projeção do Habblaud World.
+- **Só loopback:** só 127.0.0.0/8, localhost e ::1 são aceitos.
+
+## Para parar
+
+```bash
+kill <PID-do-habblaud>   # do log: /tmp/habblaud-start.log
+```
+
+Ou, se você rodou `HABBLAUD_OPENCODE=1 npm start` diretamente:
+
+```bash
+# Pressione Ctrl+C na janela do terminal
+# ou, se estiver em background:
+# encontre o PID com: pgrep -f "dist/server/index.js"
+# e rode: kill <PID>
+```
+
+## Problemas frequentes
+
+### "serviço OpenCode indisponível"
+O Habblaud procura o serviço em `$XDG_STATE_HOME/opencode/service.json` (ou `~/.local/state/opencode/service.json`). Se não encontrar, ele tenta a URL explícita (`HABBLAUD_OPENCODE_URL`, padrão `http://127.0.0.1:4096`) e só aceita endereços de loopback. O serviço é escrito pela própria TUI do OpenCode — não é preciso rodar `opencode serve` manualmente (mas é preciso que o OpenCode esteja em execução no mesmo host, com uma senha se você fornecer a URL).
+
+### "ERRO: /root/habblaud não encontrado"
+Você está rodando o script de fora da pasta `/root/habblaud`. Use o alias acima, `cd /root/habblaud` manualmente, ou mova o script para `/root/` e rode `./inicia-opencode-habblaud.sh`.
+
+### Não vê o OpenCode no escritório
+- O OpenCode deve estar em execução no mesmo host (o container Alpine não alcança o host por padrão).
+- A descoberta automática depende do registro (`~/.local/state/opencode/service.json`). Se estiver faltando, forneça a URL e a senha.
+- Use `curl -fs http://127.0.0.1:49374/api/info` para confirmar que o serviço está ativo.
+
+### As sessões não aparecem como `working` / `idle`
+O Habblaud espera `session.status` (busy/idle) da API. Se o OpenCode relatar `status: 'active'` (ou não relatar nada), o Habblaud pode não exibir.
+
+### "não há como entregar ao OpenCode agora: o serviço local está indisponível"
+Isso significa que a integração está desabilitada. Certifique-se de que `HABBLAUD_OPENCODE=1` está exportado e que o serviço está em loopback.
+
+## Arquivo
+
+- **inicia-opencode-habblaud.sh** — script de inicialização completo que define as variáveis de ambiente e inicia o Habblaud automaticamente na pasta correta.
+- **inicia-opencode-habblaud.readme** — esta documentação.
