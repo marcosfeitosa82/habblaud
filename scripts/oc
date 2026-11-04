@@ -1,0 +1,162 @@
+#!/bin/bash
+# /usr/local/bin/oc — inicia o Habblaud (integrado ao OpenCode) e abre o OpenCode CLI.
+#
+# Uso:
+#   oc          abre o OpenCode CLI; o Habblaud sobe em segundo plano assim que o
+#               serviço local do OpenCode estiver pronto (usa URL e senha do
+#               service.json atual, não credenciais fixas)
+#   oc status   mostra o estado do Habblaud e do OpenCode
+#   oc stop     para o Habblaud (o OpenCode CLI continua)
+#   oc restart  reinicia o Habblaud com as credenciais atuais do OpenCode
+#
+# O wrapper não usa proot-distro (não anida) e é o único ponto de entrada
+# recomendado: ele evita a "porta 4747 em uso" reiniciando um Habblaud que
+# esteja rodando sem as credenciais corretas.
+set -u
+
+PORT="${HABBLAUD_PORT:-4747}"
+HABBLAUD_DIR="${HABBLAUD_DIR:-/root/habblaud}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/opencode"
+SERVICE_FILE="$STATE_DIR/service.json"
+LOG="${HABBLAUD_LOG:-/tmp/habblaud.log}"
+WAIT_SERVICE="${HABBLAUD_WAIT_SERVICE:-120}"
+
+habblaud_up() {
+  curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:${PORT}/" 2>/dev/null
+}
+
+habblaud_pid() {
+  pgrep -f 'dist/server/index.js' 2>/dev/null | head -1
+}
+
+# O processo do Habblaud foi iniciado com a URL do OpenCode?
+habblaud_configured() {
+  local pid="$1"
+  [ -n "$pid" ] || return 1
+  tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -q '^HABBLAUD_OPENCODE_URL='
+}
+
+read_service_field() {
+  python3 -c "import json;print(json.load(open('$SERVICE_FILE')).get('$1',''))" 2>/dev/null
+}
+
+service_ready() {
+  [ -s "$SERVICE_FILE" ] || return 1
+  local url pid
+  url=$(read_service_field url)
+  pid=$(read_service_field pid)
+  [ -n "$url" ] || return 1
+  # Se o service.json traz um PID, ele precisa estar vivo (registro velho não vale).
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then return 1; fi
+  return 0
+}
+
+start_habblaud_with_service() {
+  local url pass pid
+  url=$(read_service_field url)
+  pass=$(read_service_field password)
+  if [ -z "$url" ] || [ -z "$pass" ]; then
+    echo ">>> service.json sem url/senha; não vou iniciar o Habblaud." >&2
+    return 1
+  fi
+
+  # Já existe um Habblaud no ar? Se está configurado, nada a fazer.
+  pid=$(habblaud_pid)
+  if habblaud_up; then
+    if [ -n "$pid" ] && habblaud_configured "$pid"; then
+      echo ">>> Habblaud já está no ar e integrado." >&2
+      return 0
+    fi
+    # Está no ar, mas sem a URL do OpenCode: reinicia com as credenciais atuais.
+    echo ">>> Habblaud no ar sem credenciais do OpenCode; reiniciando..." >&2
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    for _ in $(seq 1 10); do habblaud_up || break; sleep 1; done
+  fi
+
+  echo ">>> Iniciando Habblaud (porta ${PORT}, OpenCode ${url})..." >&2
+  cd "$HABBLAUD_DIR" || return 1
+  HABBLAUD_OPENCODE=1 HABBLAUD_PORT="$PORT" \
+    HABBLAUD_OPENCODE_URL="$url" HABBLAUD_OPENCODE_PASSWORD="$pass" \
+    nohup npm start > "$LOG" 2>&1 &
+
+  for _ in $(seq 1 30); do
+    habblaud_up && { echo ">>> Habblaud subiu." >&2; return 0; }
+    sleep 1
+  done
+  echo ">>> Habblaud não respondeu a tempo. Veja o log: $LOG" >&2
+  return 1
+}
+
+background_start() {
+  (
+    for _ in $(seq 1 "$WAIT_SERVICE"); do
+      if service_ready; then
+        start_habblaud_with_service
+        exit $?
+      fi
+      sleep 1
+    done
+    echo ">>> Timeout esperando o serviço do OpenCode (${WAIT_SERVICE}s)." >&2
+    echo ">>> O Habblaud pode ser iniciado depois com: oc restart" >&2
+    exit 1
+  ) &
+}
+
+case "${1:-}" in
+  status)
+    pid=$(habblaud_pid)
+    echo "Habblaud: $(habblaud_up && echo 'no ar' || echo 'fora do ar') (PID: ${pid:-nenhum})"
+    if [ -n "$pid" ]; then
+      echo "  integrado: $(habblaud_configured "$pid" && echo sim || echo 'não (sem HABBLAUD_OPENCODE_URL)')"
+    fi
+    if service_ready; then
+      echo "OpenCode service: $(read_service_field url) (PID: $(read_service_field pid))"
+    else
+      echo "OpenCode service: service.json ausente ou desatualizado"
+    fi
+    exit 0
+    ;;
+  stop)
+    pid=$(habblaud_pid)
+    if [ -n "$pid" ]; then
+      kill "$pid" 2>/dev/null && echo "Habblaud parado (PID $pid)."
+    else
+      echo "Habblaud não está rodando."
+    fi
+    exit 0
+    ;;
+  restart)
+    pid=$(habblaud_pid)
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    for _ in $(seq 1 10); do habblaud_up || break; sleep 1; done
+    if service_ready; then
+      start_habblaud_with_service
+    else
+      echo ">>> Serviço do OpenCode ainda não está pronto. Abra o OpenCode (oc) e tente de novo." >&2
+      exit 1
+    fi
+    exit $?
+    ;;
+  -h|--help|help)
+    sed -n '2,17p' "$0"
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    echo ">>> Opção desconhecida: $1" >&2
+    echo ">>> Use: oc | oc status | oc stop | oc restart" >&2
+    exit 2
+    ;;
+esac
+
+# oc sem argumentos: abre o CLI e garante o Habblaud em segundo plano.
+pid=$(habblaud_pid)
+if habblaud_up && [ -n "$pid" ] && habblaud_configured "$pid"; then
+  echo ">>> Habblaud já está no ar e integrado." >&2
+else
+  background_start
+fi
+
+echo ">>> Abrindo o OpenCode CLI; o Habblaud sobe/reinicia em segundo plano quando o serviço estiver pronto." >&2
+exec opencode

@@ -23,8 +23,12 @@ do meio (0.**3**.0).
   você tivesse digitado; o cartão “Pede permissão” responde `once` ao aprovar e `reject` (com o motivo) ao recusar, e
   “interromper” chama `/interrupt`. Tudo só com acesso local, sem ler o SQLite, o `auth.json` ou transcripts internos
   do OpenCode — e sem dependências novas.
-- **World continua fora do escopo:** as sessões OpenCode seguem excluídas da projeção do Habblaud World, que ainda
-  não fala `provider: 'opencode'`.
+- **OpenCode no Habblaud World:** as sessões do OpenCode agora entram na projeção do World (antes eram excluídas).
+  Como o protocolo do World ainda só fala `claude`/`codex`, elas sobem com `provider: 'claude'` — o escritório real
+  continua sendo a fonte dos dados (agentes, status e andares não são inventados).
+- **`oc` inicia o Habblaud integrado de forma definitiva.** O wrapper espera o `service.json` atual do OpenCode e
+  passa URL/senha vigentes ao Habblaud; se encontrar um Habblaud rodando sem essas credenciais, reinicia sozinho
+  (fim da “porta 4747 em uso”). Inclui `oc status`, `oc stop` e `oc restart`; instale com `bash instala-oc.sh`.
 
 ## [1.0.3] - 2026-10-16
 

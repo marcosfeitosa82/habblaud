@@ -138,8 +138,7 @@ export function projectWithReport(input: ProjectionInput, ids: WorldIdSource, no
   for (const r of input.rooms) if (!isDemoId(r.id)) roomIds.add(r.id);
   const byRoom = new Map<string, AgentInfo[]>();
   for (const a of input.agents) {
-    // OpenCode ainda não faz parte do protocolo social do World; não projetar como Claude por fallback.
-    if (a.provider === 'opencode' || isDemoId(a.id) || isDemoId(a.roomId) || !roomIds.has(a.roomId)) continue;
+    if (isDemoId(a.id) || isDemoId(a.roomId) || !roomIds.has(a.roomId)) continue;
     if ((a.kind !== 'main' && a.kind !== 'sub') || !isWorldStatus(a.status)) continue;
     const list = byRoom.get(a.roomId);
     if (list) list.push(a);
