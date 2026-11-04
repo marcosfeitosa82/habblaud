@@ -3,6 +3,7 @@ dist/
 .DS_Store
 *.log
 .env
+omniroute/.env
 docker-compose.override.yml
 scripts/assets/.cache/
 

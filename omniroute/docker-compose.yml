@@ -1,0 +1,14 @@
+version: "3.8"
+services:
+  omniroute:
+    image: diegosouzapw/omniroute:latest
+    container_name: omniroute
+    restart: unless-stopped
+    ports:
+      - "20128:20128"
+    volumes:
+      - omniroute-data:/app/data
+    env_file:
+      - .env
+volumes:
+  omniroute-data:
