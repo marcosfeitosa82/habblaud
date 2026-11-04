@@ -12,6 +12,7 @@ do meio (0.**3**.0).
 
 ### Adicionado
 
+- **OmniRoute local gateway (serviço externo):** configuração via Docker (`omniroute/docker-compose.yml`), `.env` com chave AES-256-GCM, porta `20128`, documentação em `omniroute/README.md`; não altera código do Habblaud.
 - **OpenCode no escritório, integrado de verdade.** Com `HABBLAUD_OPENCODE=1`, o Habblaud encontra o serviço local do
   OpenCode sozinho pelo registro padrão (`~/.local/state/opencode/service.json`), sem `opencode serve` nem
   `opencode attach` à mão; `HABBLAUD_OPENCODE_URL` e `HABBLAUD_OPENCODE_PASSWORD` continuam como alternativa explícita
